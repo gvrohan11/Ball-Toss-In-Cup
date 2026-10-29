@@ -1,4 +1,4 @@
-"""Teammate 3: log every attempt to MongoDB Atlas.
+"""MongoDB teammate: log every attempt to MongoDB Atlas.
 
 log_attempt(doc) - doc has ball, cup, release_pose, hit (bool), ...
 Until MONGODB_URI is set it just prints, so the main loop works without it.

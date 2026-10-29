@@ -10,7 +10,8 @@ from connection import connect
 from cups import get_cups
 from drop import drop_in_cup
 from logger import log_attempt
-from pick_ball import find_ball  # TODO (Manan): also expose pick(robot, ball, go)
+from balls import find_ball      # ball teammate
+# TODO (Manan): pick(robot, ball, go) from pick_ball.py
 
 
 async def main():
@@ -25,16 +26,16 @@ async def main():
         print("ball:", ball[:3])
         # await pick(robot, ball, go)   # TODO (Manan)
 
-        cups = await get_cups(robot)     # Teammate 1
+        cups = await get_cups(robot)     # Rohan
         if not cups:
             print("no cups found")
             return
         cup = cups[0]
         print("cup:", cup)
 
-        result = await drop_in_cup(robot, cup, go)  # Teammate 2
+        result = await drop_in_cup(robot, cup, go)  # Manan
         hit = None  # TODO: ask a human (input) or check the camera
-        log_attempt({"ball": list(ball[:3]), "cup": list(cup), **result, "hit": hit})  # Teammate 3
+        log_attempt({"ball": list(ball[:3]), "cup": list(cup), **result, "hit": hit})  # MongoDB teammate
     finally:
         await robot.close()
 

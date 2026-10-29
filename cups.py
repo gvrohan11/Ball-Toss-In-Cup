@@ -1,4 +1,4 @@
-"""Teammate 1: cup detection.
+"""Rohan: cup detection.
 
 get_cups(robot) -> list of (x, y, z) rim centers in mm, world frame.
 Test: python cups.py   (read-only, moves nothing)

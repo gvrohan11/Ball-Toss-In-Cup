@@ -1,4 +1,4 @@
-"""Teammate 2: drop the held ball into a cup.
+"""Manan: drop the held ball into a cup (Phase 1). Throw is Phase 2.
 
 drop_in_cup(robot, cup, go=False) -> dict describing what was done.
 Dry run by default; pass go=True to move.
