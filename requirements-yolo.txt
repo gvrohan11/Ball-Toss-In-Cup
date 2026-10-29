@@ -1,0 +1,2 @@
+# Optional local neural inference; CPU PyTorch installation documented in README.
+ultralytics==8.4.192
