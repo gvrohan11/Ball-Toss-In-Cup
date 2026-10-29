@@ -12,3 +12,4 @@ dependencies:
       - xarm-python-sdk==1.18.4
       - opencv-python
       - python-dotenv
+      - pymongo
