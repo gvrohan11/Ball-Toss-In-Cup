@@ -41,8 +41,8 @@ CUP_BASE_RADIUS_MM = 30
 # moved between the drops and the measurement - re-check with a moved cup.
 CUP_CORRECTION_MM = (-56, 17)  # 3rd drop at y=+25 went in but slightly off-center in y; trimmed
 # Same correction used from the 30 deg view (4th drop, cup at ~78 cm): it went in.
-# Known gap: with the ball held, the ball can hide the cup's red side and cup-detector
-# returns nothing. Next: measure the white rim (OpenCV) or use YOLO "cup" (Rohan).
+# With the ball held, the ball can hide the cup's red side and cup-detector returns nothing;
+# find_cup() now tries the rim method (cup_rim.py) first for that reason.
 
 
 def best_cup(dets):
@@ -74,8 +74,56 @@ async def _pixel_to_table(robot, k, u, v, z_world):
     return (a.x + s * (b.x - a.x), a.y + s * (b.y - a.y), z_world), (a.x, a.y)
 
 
+# Rim method (cup_rim.py): the pink-white opening, projected at rim height.
+# Measured Oct 29: 45 deg view said (925, 6) for the cup that scored at (870, 20) -> (-55, +14);
+# the 30 deg drops that went in used (-50, +17). Average:
+RIM_CORRECTION_MM = (-52, 16)
+RIM_WIDTH_OK_MM = (70, 130)   # a solo cup opening is ~95 mm; reject blobs far off that
+
+
+async def _color_frame(robot):
+    import cv2
+    import numpy as np
+    images, _ = await Camera.from_robot(robot, CAMERA).get_images(filter_source_names=["color"])
+    if not images:
+        return None
+    return cv2.imdecode(np.frombuffer(images[0].data, np.uint8), cv2.IMREAD_COLOR)
+
+
+async def find_cup_by_rim(robot):
+    """Cup rim center from the pink-white opening. Works when the held ball hides the red side."""
+    from cup_rim import find_cup_rims
+    frame = await _color_frame(robot)
+    if frame is None:
+        return None
+    k = (await Camera.from_robot(robot, CAMERA).get_properties()).intrinsic_parameters
+    rim_z = TABLE_Z + CUP_HEIGHT_MM
+    for r in find_cup_rims(frame):
+        c = await _pixel_to_table(robot, k, r["u"], r["v"], rim_z)
+        left = await _pixel_to_table(robot, k, r["box"][0], r["v"], rim_z)
+        right = await _pixel_to_table(robot, k, r["box"][2], r["v"], rim_z)
+        if c is None or left is None or right is None:
+            continue
+        width = math.dist(left[0][:2], right[0][:2])
+        if not (RIM_WIDTH_OK_MM[0] <= width <= RIM_WIDTH_OK_MM[1]):
+            print(f"  [cup] rim candidate rejected: {width:.0f} mm wide")
+            continue
+        (x, y, z), _ = c
+        print(f"  [cup] rim found, {width:.0f} mm wide, red {r['red_fraction']:.0%}")
+        return (x + RIM_CORRECTION_MM[0], y + RIM_CORRECTION_MM[1], z)
+    return None
+
+
 async def find_cup(robot):
-    """Return the cup rim center (x, y, z) in mm, world frame, from the CURRENT view, or None."""
+    """Cup rim center (x, y, z) in mm, world frame, from the CURRENT view, or None.
+    Tries the rim method first, then the red-body detector."""
+    try:
+        cup = await find_cup_by_rim(robot)
+    except Exception as e:  # never let the new path break the loop
+        print(f"  [cup] rim method failed ({e}); trying cup-detector")
+        cup = None
+    if cup is not None:
+        return cup
     d = best_cup(await VisionClient.from_robot(robot, CUP_DETECTOR).get_detections_from_camera(CAMERA))
     if d is None:
         return None

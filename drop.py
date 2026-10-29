@@ -26,17 +26,23 @@ STRAIGHT_DOWN_MAX_X_MM = 650  # beyond this, tilt forward to reach
 FIRST_HIT_POSE = dict(x=870, y=20, z=300, o_x=0.7, o_y=0, o_z=-0.7, theta=180)
 
 
-def release_pose(cup):
+MAX_AUTOTUNE_MM = 30         # never let learned offsets move the aim more than 3 cm
+
+
+def release_pose(cup, extra=(0, 0)):
+    ex = max(-MAX_AUTOTUNE_MM, min(MAX_AUTOTUNE_MM, extra[0]))
+    ey = max(-MAX_AUTOTUNE_MM, min(MAX_AUTOTUNE_MM, extra[1]))
     cx, cy, cz = cup
-    x, y, z = cx + OFFSET_X_MM, cy + OFFSET_Y_MM, cz + RELEASE_ABOVE_RIM_MM
+    x, y, z = cx + OFFSET_X_MM + ex, cy + OFFSET_Y_MM + ey, cz + RELEASE_ABOVE_RIM_MM
     if x <= STRAIGHT_DOWN_MAX_X_MM:
         return dict(x=x, y=y, z=z, o_x=0, o_y=0, o_z=-1, theta=180)
     return dict(x=x, y=y, z=z, o_x=0.7, o_y=0, o_z=-0.7, theta=180)
 
 
-async def drop_in_cup(robot, cup, go=False):
-    """cup = (x, y, z) of the rim center, mm, world frame."""
-    p = release_pose(cup)
+async def drop_in_cup(robot, cup, go=False, extra_offset=(0, 0)):
+    """cup = (x, y, z) of the rim center, mm, world frame.
+    extra_offset = learned correction from logger.suggest_offset() (capped at 3 cm)."""
+    p = release_pose(cup, extra_offset)
     print(f"  drop: gripper to x={p['x']:.0f} y={p['y']:.0f} z={p['z']:.0f} "
           f"o=({p['o_x']},{p['o_y']},{p['o_z']}), then open")
     if go:
@@ -46,4 +52,4 @@ async def drop_in_cup(robot, cup, go=False):
                           destination=PoseInFrame(reference_frame="world", pose=Pose(**p)))
         await gripper.open()
     return {"release_pose": p, "above_rim_mm": RELEASE_ABOVE_RIM_MM,
-            "offset_mm": [OFFSET_X_MM, OFFSET_Y_MM]}
+            "offset_mm": [OFFSET_X_MM, OFFSET_Y_MM], "autotune_mm": list(extra_offset)}
