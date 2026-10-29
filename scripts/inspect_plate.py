@@ -15,7 +15,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from connection import connect
 from scene_detection import SceneDetector, ball_candidates, circle_proposals
-from cup_tracking import world_point
+from viam.proto.common import Pose, PoseInFrame
+
+
+async def world_point(robot, point, source='cam', destination='world'):
+    result = await robot.transform_pose(PoseInFrame(reference_frame=source,
+        pose=Pose(x=float(point[0]), y=float(point[1]), z=float(point[2]))), destination)
+    return np.array([result.pose.x, result.pose.y, result.pose.z])
 
 
 async def main(args):
