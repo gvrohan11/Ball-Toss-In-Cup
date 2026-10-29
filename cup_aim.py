@@ -25,6 +25,8 @@ CUP_DETECTOR = "cup-detector"
 
 # Gripper pose for looking at the far end of the table.
 CUP_LOOK = dict(x=550, y=0, z=650, o_x=0.7, o_y=0, o_z=-0.7, theta=180)
+# Fallback: tilted further forward, so the held ball sits lower / out of the camera view.
+CUP_LOOK_FAR = dict(x=550, y=0, z=650, o_x=0.8, o_y=0, o_z=-0.6, theta=180)
 
 TABLE_Z = -10              # real tabletop height (fingers hit the table lower than the config's -23)
 CUP_HEIGHT_MM = 120        # rim height above the table
