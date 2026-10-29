@@ -1,0 +1,1 @@
+{"model_path": ".cup-models/yolo11m-seg.pt", "rotation_search": true, "semantic_confidence": 0.12, "image_size": 1280, "top_view_enabled": false}

@@ -1,0 +1,41 @@
+{
+  "modules": [
+    {
+      "name": "red-solo-cup-local",
+      "type": "local",
+      "executable_path": "/ABSOLUTE/PATH/ON/ROBOT/Ball-Toss-In-Cup/cup_detection/run.sh",
+      "environment": {
+        "CUP_PYTHON": "/ABSOLUTE/PATH/ON/ROBOT/Ball-Toss-In-Cup/.conda/bin/python"
+      }
+    }
+  ],
+  "services": [
+    {
+      "name": "cup-detector-v2",
+      "api": "rdk:service:vision",
+      "model": "rohan:cup-detection:red-solo-cup",
+      "attributes": {
+        "camera_name": "cam",
+        "model_path": "/ABSOLUTE/PATH/ON/ROBOT/models/yolo11m-seg.pt",
+        "semantic_enabled": true,
+        "semantic_confidence": 0.12,
+        "image_size": 1280,
+        "rotation_search": true,
+        "top_view_enabled": false
+      }
+    }
+  ],
+  "components": [
+    {
+      "name": "cup-boxes",
+      "api": "rdk:component:camera",
+      "model": "rdk:builtin:transform",
+      "attributes": {
+        "source": "cam",
+        "pipeline": [
+          {"type": "detections", "attributes": {"detector_name": "cup-detector-v2", "confidence_threshold": 0.12}}
+        ]
+      }
+    }
+  ]
+}
