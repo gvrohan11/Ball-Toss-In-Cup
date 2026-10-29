@@ -166,3 +166,28 @@ def test_wait_gripper_rejects_bad_reading():
 
     with pytest.raises(RuntimeError):
         asyncio.run(pick_ball.wait_gripper(Bad()))
+
+
+def test_telemetry_records_timeline(rig, monkeypatch):
+    import mongomock
+    import logger
+    import telemetry
+
+    motion, grip = rig
+
+    async def cup(robot, topdown=False):
+        return (730.0, -66.0, 110.0)
+
+    tel = telemetry.Telemetry(None, True)    # robot=None: timeline only, no hardware reads
+    monkeypatch.setattr(main, "TEL", tel)
+    tel.images.append({"t": 0.1, "stage": "cup_view", "jpeg": b"\xff\xd8fake"})
+    doc, state = run(motion, cup, monkeypatch)
+    doc["telemetry"] = tel.as_doc()
+    t = doc["telemetry"]
+    assert [e["stage"] for e in t["events"]][:2] == ["home", "ball_measured"]
+    assert "released" in [e["stage"] for e in t["events"]]
+    assert set(t["phases"]) >= {"start", "find_ball", "pick", "cup_scan", "drop"}
+    assert any(m["stage"].startswith("cup_view") for m in t["moves"])
+    monkeypatch.setattr(logger, "_collection", mongomock.MongoClient()["balltoss"]["attempts"])
+    logger.log_attempt(doc)                     # stores cleanly, incl. binary thumbnail
+    assert logger._collection.count_documents({"telemetry.events.stage": "released"}) == 1

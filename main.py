@@ -20,13 +20,22 @@ from cup_aim import CUP_SCAN, find_cup
 from drop import drop_in_cup
 from logger import log_attempt, suggest_offset
 from pick_ball import GRIPPER, LOOK, THETA, find_ball, pick
+from telemetry import Telemetry
+
+TEL = None  # Telemetry for the current run (set in main)
 
 
-async def move_to(motion, p, go):
+async def move_to(motion, p, go, label="move"):
     print(f"  -> gripper to {p}")
     if go:
-        ok = await motion.move(component_name=GRIPPER,
-                               destination=PoseInFrame(reference_frame="world", pose=Pose(**p)))
+        t = time.monotonic()
+        ok = None
+        try:
+            ok = await motion.move(component_name=GRIPPER,
+                                   destination=PoseInFrame(reference_frame="world", pose=Pose(**p)))
+        finally:
+            if TEL:
+                TEL.move(label, p, ok, time.monotonic() - t)
         if ok is False:
             raise RuntimeError("Motion did not complete")
 
@@ -74,12 +83,16 @@ async def scan_for_cup(motion, robot, go):
         print(f"  view {i}/{len(CUP_SCAN)}: y={look['y']:+.0f}, "
               f"{'top-down' if look['o_z'] == -1 else 'tilted'}")
         try:
-            await move_to(motion, look, go)
+            await move_to(motion, look, go, label=f"cup_view_{i}")
         except Exception as e:
             print(f"    can't reach this view ({str(e)[:80]}); skipping")
             continue
         cup = await find_cup(robot, topdown=(look["o_z"] == -1))
+        if TEL:
+            await TEL.snap(f"cup_view_{i}", found=cup is not None, view=look)
         if cup is not None:
+            if TEL:
+                await TEL.thumbnail("cup_view")
             return cup
     return None
 
@@ -110,26 +123,45 @@ async def release_if_holding(robot, motion, go):
         await move_to(motion, dict(x=x, y=y, z=HOVER_Z, o_x=0, o_y=0, o_z=-1, theta=THETA), go)
 
 
+async def _snap(stage, **kw):
+    if TEL:
+        await TEL.snap(stage, **kw)
+
+
+def _phase(name):
+    if TEL:
+        TEL.phase(name)
+
+
 async def run_once(robot, motion, go, home, t0):
     print("0) start from the saved home pose")
-    await move_to(motion, home, go)
+    _phase("start")
+    await move_to(motion, home, go, label="home")
     await release_if_holding(robot, motion, go)
-    await move_to(motion, home, go)
+    await move_to(motion, home, go, label="home")
+    await _snap("home")
 
     print("1) find ball")
+    _phase("find_ball")
     ball = await find_ball(robot, motion, go)
+    await _snap("ball_measured", ball_mm=list(ball) if ball else None)
+    if TEL and ball:
+        await TEL.thumbnail("ball_view")
     if ball is None:
         print("no ball found")
         return {"result": {"hit": False, "failure": "no_ball_found"}}, None
 
     print("2) pick")
+    _phase("pick")
     held = await pick(robot, ball, go)
+    await _snap("after_pick", held=held)
     if go and not held:
         print("pick missed")
         return {"ball": {"pos_mm": ball}, "result": {"hit": False, "failure": "grasp_failed"}}, None
 
     # Ball is in the gripper from here on: any failure puts it back first.
     print("3) find cup (wide scan)")
+    _phase("cup_scan")
     cup = await scan_for_cup(motion, robot, go)
     if cup is None:
         print("no cup found in any view")
@@ -142,8 +174,10 @@ async def run_once(robot, motion, go, home, t0):
         extra = suggest_offset()
         print(f"  autotune from Atlas misses: {extra[0]:+.0f}, {extra[1]:+.0f} mm")
     print("4) drop (centered on the cup)")
+    _phase("drop")
     try:
         result = await drop_in_cup(robot, cup, go, extra)
+        await _snap("released", cup_mm=list(cup))
     except Exception as e:
         print(f"  can't reach the cup ({str(e)[:80]})")
         await put_ball_back(robot, motion, ball, go)
@@ -153,12 +187,28 @@ async def run_once(robot, motion, go, home, t0):
             "release": result}, "dropped"
 
 
+def _run_config():
+    import cup_aim
+    import drop
+    import pick_ball
+    return {"theta": THETA, "home": list(LOOK),
+            "ball_cam_correction_mm": list(pick_ball.CAM_CORRECTION_MM),
+            "grab_z": pick_ball.GRAB_Z, "hover_z": pick_ball.HOVER_Z,
+            "rim_correction_mm": list(cup_aim.RIM_CORRECTION_MM),
+            "topdown_correction_mm": list(cup_aim.TOPDOWN_CORRECTION_MM),
+            "release_above_rim_mm": drop.RELEASE_ABOVE_RIM_MM,
+            "autotune": "--autotune" in sys.argv}
+
+
 async def main():
+    global TEL
     go = "--go" in sys.argv
     print("MODE:", "LIVE (arm will move)" if go else "DRY RUN (no motion, nothing logged)")
     t0 = time.monotonic()
     home = dict(x=LOOK[0], y=LOOK[1], z=LOOK[2], o_x=0, o_y=0, o_z=-1, theta=THETA)
     robot = await connect()
+    TEL = Telemetry(robot, go)
+    TEL.config.update(_run_config())
     try:
         motion = MotionClient.from_robot(robot, "builtin")
         try:
@@ -182,6 +232,7 @@ async def main():
             doc["result"] = res
         if go:
             doc["duration_s"] = round(time.monotonic() - t0, 1)
+            doc["telemetry"] = TEL.as_doc()
             log_attempt(doc)
     finally:
         await robot.close()
