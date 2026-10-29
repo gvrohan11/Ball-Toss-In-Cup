@@ -28,9 +28,28 @@ CUP_DETECTOR = "cup-detector"
 # (A fixed 45 deg view missed a cup placed at ~78 cm.)
 CUP_LOOK_30 = dict(x=550, y=0, z=650, o_x=0.5, o_y=0, o_z=-0.866, theta=180)
 CUP_LOOK_45 = dict(x=550, y=0, z=650, o_x=0.7, o_y=0, o_z=-0.7, theta=180)
-CUP_LOOKS = (CUP_LOOK_30, CUP_LOOK_45)
 CUP_LOOK = CUP_LOOK_45       # kept for older imports
 CUP_LOOK_FAR = CUP_LOOK_30
+
+# Wide scan. The arm slides SIDEWAYS (same orientation) rather than rotating, so the
+# camera calibration measured at y=0 still holds in every view.
+SCAN_SIDE_MM = 220
+# Straight-down high view: sees cups ~30-90 cm out, wide; the pink inside is visible from above.
+CUP_LOOK_TOP = dict(x=480, y=0, z=800, o_x=0, o_y=0, o_z=-1, theta=180)
+
+
+def _shift(p, dy):
+    return {**p, "y": p["y"] + dy}
+
+
+CUP_SCAN = (
+    CUP_LOOK_30,
+    CUP_LOOK_45,
+    _shift(CUP_LOOK_30, SCAN_SIDE_MM), _shift(CUP_LOOK_30, -SCAN_SIDE_MM),
+    _shift(CUP_LOOK_45, SCAN_SIDE_MM), _shift(CUP_LOOK_45, -SCAN_SIDE_MM),
+    CUP_LOOK_TOP,
+)
+CUP_LOOKS = CUP_SCAN
 
 TABLE_Z = -10              # real tabletop height (fingers hit the table lower than the config's -23)
 CUP_HEIGHT_MM = 120        # rim height above the table
@@ -78,6 +97,8 @@ async def _pixel_to_table(robot, k, u, v, z_world):
 # Measured Oct 29: 45 deg view said (925, 6) for the cup that scored at (870, 20) -> (-55, +14);
 # the 30 deg drops that went in used (-50, +17). Average:
 RIM_CORRECTION_MM = (-52, 16)
+# Straight-down views: the camera error measured on the ball picks at theta=180.
+TOPDOWN_CORRECTION_MM = (-15, 20)
 RIM_WIDTH_OK_MM = (70, 130)   # a solo cup opening is ~95 mm; reject blobs far off that
 
 
@@ -90,8 +111,9 @@ async def _color_frame(robot):
     return cv2.imdecode(np.frombuffer(images[0].data, np.uint8), cv2.IMREAD_COLOR)
 
 
-async def find_cup_by_rim(robot):
-    """Cup rim center from the pink-white opening. Works when the held ball hides the red side."""
+async def find_cup_by_rim(robot, topdown=False):
+    """Cup rim center from the pink-white opening. Works when the held ball hides the red side.
+    topdown=True when the camera points straight down (different calibration)."""
     from cup_rim import find_cup_rims
     frame = await _color_frame(robot)
     if frame is None:
@@ -110,19 +132,20 @@ async def find_cup_by_rim(robot):
             continue
         (x, y, z), _ = c
         print(f"  [cup] rim found, {width:.0f} mm wide, red {r['red_fraction']:.0%}")
-        return (x + RIM_CORRECTION_MM[0], y + RIM_CORRECTION_MM[1], z)
+        corr = TOPDOWN_CORRECTION_MM if topdown else RIM_CORRECTION_MM
+        return (x + corr[0], y + corr[1], z)
     return None
 
 
-async def find_cup(robot):
+async def find_cup(robot, topdown=False):
     """Cup rim center (x, y, z) in mm, world frame, from the CURRENT view, or None.
-    Tries the rim method first, then the red-body detector."""
+    Tries the rim method first, then the red-body detector (angled views only)."""
     try:
-        cup = await find_cup_by_rim(robot)
+        cup = await find_cup_by_rim(robot, topdown)
     except Exception as e:  # never let the new path break the loop
         print(f"  [cup] rim method failed ({e}); trying cup-detector")
         cup = None
-    if cup is not None:
+    if cup is not None or topdown:
         return cup
     d = best_cup(await VisionClient.from_robot(robot, CUP_DETECTOR).get_detections_from_camera(CAMERA))
     if d is None:
