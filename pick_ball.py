@@ -48,6 +48,7 @@ CAM_OFFSET_XY = (_SIGN * _CAM_OFFSET_THETA0[0], _SIGN * _CAM_OFFSET_THETA0[1])
 CAM_CORRECTION_MM = _CAM_CORRECTION_THETA0 if THETA == 0 else (-15, 20)
 HOVER_Z = 150
 GRAB_Z = 70                 # fingers swing DOWN while closing; lower than ~60 drags them on the table
+GRIP_BLOCKED_POS = 800      # fingers barely closed: they hit something (a plate, other balls)
 HOLDING_MIN_POS = 50        # gripper position below this after closing = closed on nothing
 
 
@@ -79,27 +80,61 @@ def best_ball(dets):
     return best
 
 
-async def locate_ball(robot):
-    """Return the ball center (x, y, z) in mm, world frame, from the current camera view."""
-    vision = VisionClient.from_robot(robot, BALL_DETECTOR)
-    cam = Camera.from_robot(robot, CAMERA)
-    d = best_ball(await vision.get_detections_from_camera(CAMERA))
-    if d is None:
+BALL_CENTER_Z = -10 + BALL_DIAMETER_MM / 2   # real tabletop (-10) + radius
+
+
+async def _frame(cam):
+    import cv2
+    import numpy as np
+    images, _ = await cam.get_images(filter_source_names=["color"])
+    if not images:
         return None
+    return cv2.imdecode(np.frombuffer(images[0].data, np.uint8), cv2.IMREAD_COLOR)
+
+
+async def locate_ball(robot, prefer_center=False):
+    """Ball center (x, y, z) in mm, world frame, from the current camera view, or None.
+
+    Finds INDIVIDUAL balls as circles of the size a ball must have at this camera height
+    (ball_finder.py), so touching balls in a cluster are split instead of merged into one
+    "huge, close" ball. Position = camera ray through the circle center intersected with
+    the plane at ball-center height (not the blob size, which clusters break).
+    Balls touching other balls are skipped: the fingers would hit the neighbours."""
+    from ball_finder import find_balls
+    from cup_aim import _pixel_to_table
+
+    cam = Camera.from_robot(robot, CAMERA)
     k = (await cam.get_properties()).intrinsic_parameters
     if k.focal_x_px <= 0 or k.focal_y_px <= 0:
         raise ValueError("Camera intrinsics must have positive focal lengths")
-    u, v = (d.x_min + d.x_max) / 2, (d.y_min + d.y_max) / 2
-    size_px = max(d.x_max - d.x_min, d.y_max - d.y_min)
-    depth = k.focal_x_px * BALL_DIAMETER_MM / size_px
-    p_cam = Pose(x=(u - k.center_x_px) / k.focal_x_px * depth,
-                 y=(v - k.center_y_px) / k.focal_y_px * depth,
-                 z=depth)
-    w = await robot.transform_pose(PoseInFrame(reference_frame=CAMERA, pose=p_cam), "world")
-    result = (w.pose.x, w.pose.y, w.pose.z)
-    if not all(math.isfinite(v) for v in result):
+    frame = await _frame(cam)
+    if frame is None:
+        return None
+    cam_pos = (await robot.transform_pose(
+        PoseInFrame(reference_frame=CAMERA, pose=Pose(x=0, y=0, z=0)), "world")).pose
+    dist = cam_pos.z - BALL_CENTER_Z
+    if dist <= 50:
+        raise ValueError("Camera is too low to look for balls")
+    expected_r = k.focal_x_px * (BALL_DIAMETER_MM / 2) / dist
+    balls = find_balls(frame, expected_r)
+    alone = [b for b in balls if not b["touching"]]
+    if balls and not alone:
+        print(f"  {len(balls)} ball(s) found but all touching others; spread them out")
+        return None
+    if not alone:
+        return None
+    if prefer_center:
+        alone.sort(key=lambda b: (b["u"] - k.center_x_px) ** 2 + (b["v"] - k.center_y_px) ** 2)
+    b = alone[0]
+    hit = await _pixel_to_table(robot, k, b["u"], b["v"], BALL_CENTER_Z)
+    if hit is None:
+        return None
+    (x, y, z), _ = hit
+    if not all(math.isfinite(v) for v in (x, y, z)):
         raise ValueError("Ball localization returned invalid coordinates")
-    return result
+    print(f"  ball at pixel ({b['u']:.0f},{b['v']:.0f}) r={b['r']:.0f}px "
+          f"(expected {expected_r:.0f}), {len(balls)} ball(s) in view")
+    return (x, y, z)
 
 
 async def find_ball(robot, motion, go):
@@ -110,7 +145,7 @@ async def find_ball(robot, motion, go):
         return None
     print(f"  coarse ball: {coarse[0]:.0f}, {coarse[1]:.0f}, {coarse[2]:.0f}")
     await move(motion, coarse[0] + CAM_OFFSET_XY[0], coarse[1] + CAM_OFFSET_XY[1], MEASURE_HEIGHT_Z, go)
-    fine = await locate_ball(robot) if go else coarse
+    fine = await locate_ball(robot, prefer_center=True) if go else coarse
     if fine is None:
         return None
     jump = math.hypot(fine[0] - coarse[0], fine[1] - coarse[1])
@@ -153,6 +188,11 @@ async def pick(robot, ball, go):
     print(f"  gripper closed at position {pos}")
     if pos is not None and pos <= HOLDING_MIN_POS:
         print("  gripper closed on nothing; not lifting")
+        return False
+    if pos is not None and pos >= GRIP_BLOCKED_POS:
+        print("  fingers blocked (landed on something, not around the ball); opening and backing off")
+        await gripper.open()
+        await move(motion, x, y, HOVER_Z, go)
         return False
     await move(motion, x, y, HOVER_Z, go)
     pos = (await gripper.do_command({"get": True})).get("pos")
