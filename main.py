@@ -25,8 +25,10 @@ from pick_ball import GRIPPER, LOOK, THETA, find_ball, pick
 async def move_to(motion, p, go):
     print(f"  -> gripper to {p}")
     if go:
-        await motion.move(component_name=GRIPPER,
-                          destination=PoseInFrame(reference_frame="world", pose=Pose(**p)))
+        ok = await motion.move(component_name=GRIPPER,
+                               destination=PoseInFrame(reference_frame="world", pose=Pose(**p)))
+        if ok is False:
+            raise RuntimeError("Motion did not complete")
 
 
 def ask_result():

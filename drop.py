@@ -48,8 +48,10 @@ async def drop_in_cup(robot, cup, go=False, extra_offset=(0, 0)):
     if go:
         motion = MotionClient.from_robot(robot, "builtin")
         gripper = Gripper.from_robot(robot, GRIPPER)
-        await motion.move(component_name=GRIPPER,
-                          destination=PoseInFrame(reference_frame="world", pose=Pose(**p)))
+        ok = await motion.move(component_name=GRIPPER,
+                               destination=PoseInFrame(reference_frame="world", pose=Pose(**p)))
+        if ok is False:
+            raise RuntimeError("Release motion did not complete; keeping gripper closed")
         await gripper.open()
     return {"release_pose": p, "above_rim_mm": RELEASE_ABOVE_RIM_MM,
             "offset_mm": [OFFSET_X_MM, OFFSET_Y_MM], "autotune_mm": list(extra_offset)}

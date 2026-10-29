@@ -87,11 +87,12 @@ def recent_attempts(n=20, session=None):
 
 
 def hit_rate(session=None):
-    """(hits, total) over attempts that reached the drop and recorded a result."""
+    """(hits, total) over attempts that reached the drop and recorded a result.
+    Failures before the drop (no ball, missed pick, no cup) are not counted here."""
     col = _get_collection()
     if col is None:
         return (0, 0)
-    q = {"result.hit": {"$in": [True, False]}}
+    q = {"phase": "drop", "result.hit": {"$in": [True, False]}}
     if session:
         q["session"] = session
     total = col.count_documents(q)
