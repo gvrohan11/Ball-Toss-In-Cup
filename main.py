@@ -16,7 +16,7 @@ from viam.proto.common import Pose, PoseInFrame
 from viam.services.motion import MotionClient
 
 from connection import connect
-from cup_aim import CUP_LOOKS, find_cup
+from cup_aim import CUP_SCAN, find_cup
 from drop import drop_in_cup
 from logger import log_attempt, suggest_offset
 from pick_ball import GRIPPER, LOOK, THETA, find_ball, pick
@@ -48,68 +48,111 @@ def ask_result():
         return False, None
 
 
+async def put_ball_back(robot, motion, ball, go):
+    """Safe fail: carry the held ball back to where it was picked, set it down, open, go up."""
+    from viam.components.gripper import Gripper
+    from pick_ball import GRAB_Z, HOVER_Z
+    print("  putting the ball back")
+    gripper = Gripper.from_robot(robot, GRIPPER)
+    try:
+        if ball is not None:
+            await move_to(motion, dict(x=ball[0], y=ball[1], z=HOVER_Z, o_x=0, o_y=0, o_z=-1, theta=THETA), go)
+            await move_to(motion, dict(x=ball[0], y=ball[1], z=GRAB_Z + 10, o_x=0, o_y=0, o_z=-1, theta=THETA), go)
+    except Exception as e:
+        print(f"  couldn't reach the pick spot ({e}); releasing where I am")
+    if go:
+        await gripper.open()
+    if ball is not None:
+        await move_to(motion, dict(x=ball[0], y=ball[1], z=HOVER_Z, o_x=0, o_y=0, o_z=-1, theta=THETA), go)
+
+
+async def scan_for_cup(motion, robot, go):
+    """Try every view in CUP_SCAN; skip views the planner can't reach."""
+    for i, look in enumerate(CUP_SCAN, 1):
+        print(f"  view {i}/{len(CUP_SCAN)}: y={look['y']:+.0f}, "
+              f"{'top-down' if look['o_z'] == -1 else 'tilted'}")
+        try:
+            await move_to(motion, look, go)
+        except Exception as e:
+            print(f"    can't reach this view ({str(e)[:80]}); skipping")
+            continue
+        cup = await find_cup(robot, topdown=(look["o_z"] == -1))
+        if cup is not None:
+            return cup
+    return None
+
+
+async def run_once(robot, motion, go, home, t0):
+    print("0) start from the saved home pose")
+    await move_to(motion, home, go)
+
+    print("1) find ball")
+    ball = await find_ball(robot, motion, go)
+    if ball is None:
+        print("no ball found")
+        return {"result": {"hit": False, "failure": "no_ball_found"}}, None
+
+    print("2) pick")
+    held = await pick(robot, ball, go)
+    if go and not held:
+        print("pick missed")
+        return {"ball": {"pos_mm": ball}, "result": {"hit": False, "failure": "grasp_failed"}}, None
+
+    # Ball is in the gripper from here on: any failure puts it back first.
+    print("3) find cup (wide scan)")
+    cup = await scan_for_cup(motion, robot, go)
+    if cup is None:
+        print("no cup found in any view")
+        await put_ball_back(robot, motion, ball, go)
+        return {"ball": {"pos_mm": ball}, "result": {"hit": False, "failure": "no_cup_found"}}, None
+    print(f"  cup rim center: {cup[0]:.0f}, {cup[1]:.0f}, {cup[2]:.0f}")
+
+    extra = (0, 0)
+    if "--autotune" in sys.argv:
+        extra = suggest_offset()
+        print(f"  autotune from Atlas misses: {extra[0]:+.0f}, {extra[1]:+.0f} mm")
+    print("4) drop (centered on the cup)")
+    try:
+        result = await drop_in_cup(robot, cup, go, extra)
+    except Exception as e:
+        print(f"  can't reach the cup ({str(e)[:80]})")
+        await put_ball_back(robot, motion, ball, go)
+        return {"ball": {"pos_mm": ball}, "cup": {"pos_mm": cup},
+                "result": {"hit": False, "failure": "cup_out_of_reach"}}, None
+    return {"phase": "drop", "ball": {"pos_mm": ball}, "cup": {"pos_mm": cup},
+            "release": result}, "dropped"
+
+
 async def main():
     go = "--go" in sys.argv
-    print("MODE:", "LIVE (arm will move)" if go else "DRY RUN (no motion)")
+    print("MODE:", "LIVE (arm will move)" if go else "DRY RUN (no motion, nothing logged)")
     t0 = time.monotonic()
     home = dict(x=LOOK[0], y=LOOK[1], z=LOOK[2], o_x=0, o_y=0, o_z=-1, theta=THETA)
     robot = await connect()
     try:
         motion = MotionClient.from_robot(robot, "builtin")
-
-        print("0) start from the saved home pose")
-        await move_to(motion, home, go)
-
-        print("1) find ball")
-        ball = await find_ball(robot, motion, go)
-        if ball is None:
-            log_attempt({"result": {"hit": False, "failure": "no_ball_found"}})
-            print("no ball found")
-            return
-
-        print("2) pick")
-        held = await pick(robot, ball, go)
-        if go and not held:
-            log_attempt({"ball": {"pos_mm": ball}, "result": {"hit": False, "failure": "grasp_failed"}})
-            print("pick missed")
+        try:
+            doc, state = await run_once(robot, motion, go, home, t0)
+        except BaseException as e:  # error or Ctrl+C: never leave the ball hanging
+            print(f"!! stopped ({type(e).__name__}: {e}) - opening gripper and going home")
+            if go:
+                from viam.components.gripper import Gripper
+                await Gripper.from_robot(robot, GRIPPER).open()
+            raise
+        finally:
+            print("5) home")
             await move_to(motion, home, go)
-            return
 
-        # Zoom out and look across the table at an angle to find the cup:
-        # 30 deg first (closer cups), then 45 deg (far end of the table).
-        print("3) find cup")
-        cup = None
-        for look in CUP_LOOKS:
-            await move_to(motion, look, go)
-            cup = await find_cup(robot)
-            if cup is not None:
-                break
-        if cup is None:
-            print("no cup found - check cup-detector at the cup-look pose; going home holding the ball")
-            await move_to(motion, home, go)
-            return
-        print(f"  cup rim center: {cup[0]:.0f}, {cup[1]:.0f}, {cup[2]:.0f}")
-
-        extra = (0, 0)
-        if "--autotune" in sys.argv:
-            extra = suggest_offset()
-            print(f"  autotune from Atlas misses: {extra[0]:+.0f}, {extra[1]:+.0f} mm")
-        print("4) drop (centered on the cup)")
-        result = await drop_in_cup(robot, cup, go, extra)
-
-        print("5) home")
-        await move_to(motion, home, go)
-
-        hit, miss = None, None
-        if go:
+        if state == "dropped" and go:
             hit, miss = ask_result()
-        res = {"hit": hit}
-        if miss is not None:
-            res["miss_mm"] = miss
-            res["failure"] = "missed"
-        log_attempt({"phase": "drop", "ball": {"pos_mm": ball}, "cup": {"pos_mm": cup},
-                     "release": result, "result": res,
-                     "duration_s": round(time.monotonic() - t0, 1)})
+            res = {"hit": hit}
+            if miss is not None:
+                res["miss_mm"] = miss
+                res["failure"] = "missed"
+            doc["result"] = res
+        if go:
+            doc["duration_s"] = round(time.monotonic() - t0, 1)
+            log_attempt(doc)
     finally:
         await robot.close()
 
