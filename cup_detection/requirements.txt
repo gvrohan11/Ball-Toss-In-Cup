@@ -1,0 +1,4 @@
+viam-sdk==0.85.1
+ultralytics==8.4.192
+numpy>=1.26,<3
+opencv-python>=4.10,<5

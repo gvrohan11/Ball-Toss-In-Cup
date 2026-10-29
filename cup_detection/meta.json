@@ -1,0 +1,8 @@
+{
+  "module_id": "rohan:cup-detection",
+  "visibility": "private",
+  "url": "",
+  "description": "RGB-D red solo cup detection and conservative rim geometry",
+  "models": [{"api": "rdk:service:vision", "model": "rohan:cup-detection:red-solo-cup"}],
+  "entrypoint": "cup_detection/run.sh"
+}
