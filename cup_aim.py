@@ -71,6 +71,8 @@ async def _pixel_to_table(robot, k, u, v, z_world):
     if abs(dz) < 1e-6:
         return None
     s = (z_world - a.z) / dz
+    if not math.isfinite(s) or s <= 0:
+        return None
     return (a.x + s * (b.x - a.x), a.y + s * (b.y - a.y), z_world), (a.x, a.y)
 
 

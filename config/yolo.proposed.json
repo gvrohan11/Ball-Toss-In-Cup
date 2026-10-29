@@ -1,0 +1,40 @@
+{
+  "modules": [
+    {
+      "module_id": "viam-labs:YOLOv8",
+      "name": "viam-labs_YOLOv8",
+      "type": "registry",
+      "version": "1.0.2-rc3"
+    }
+  ],
+  "services": [
+    {
+      "api": "rdk:service:vision",
+      "attributes": {
+        "camera_name": "cam",
+        "classes": [
+          "sports ball"
+        ],
+        "confidence": 0.25,
+        "model_location": "yolov8n.pt",
+        "source_name": "color"
+      },
+      "model": "viam-labs:vision:yolov8",
+      "name": "ball-yolo"
+    },
+    {
+      "api": "rdk:service:vision",
+      "attributes": {
+        "camera_name": "cam",
+        "confidence_threshold_pct": 0.25,
+        "depth_threshold_mm": 50,
+        "detector_name": "ball-yolo",
+        "mean_k": 5,
+        "min_points_in_segment": 20,
+        "sigma": 1.25
+      },
+      "model": "viam:vision:detections-to-segments",
+      "name": "ball-yolo-3d"
+    }
+  ]
+}

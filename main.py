@@ -1,30 +1,28 @@
-"""Manan: the full loop. find ball -> pick -> find cup -> drop -> home -> log.
+"""Remember cup in world frame -> pick -> planned transfer -> verify -> release.
 
 python main.py          # dry run: prints the plan, moves nothing
 python main.py --go     # runs on the arm (someone on the E-stop!)
 
-Uses the sequences that worked on sfhack11 (Oct 29): pick_ball.py (2/2 picks),
-cup_aim.py + drop.py (2/2 drops). Swap in balls.find_ball / cups.get_cups when
-the ball and cup teammates' versions are reliable.
+Uses two-view rim triangulation before picking, world-frame cup memory,
+continuous planned-motion feedback and visual release verification.
+Default mode observes the current frame without moving hardware.
 """
 import asyncio
 import sys
 
-from viam.proto.common import Pose, PoseInFrame
-from viam.services.motion import MotionClient
-
 from connection import connect
-from cup_aim import CUP_LOOKS, find_cup
-from drop import drop_in_cup
+from cup_tracking import scan_cup, observe_rims
+from drop import drop_at_remembered_cup
+from motion_control import MotionController
 from logger import log_attempt
-from pick_ball import GRIPPER, LOOK, THETA, find_ball, pick
+from pick_ball import LOOK, THETA, find_ball, pick
 
 
-async def move_to(motion, p, go):
-    print(f"  -> gripper to {p}")
+def record_attempt(doc, go):
     if go:
-        await motion.move(component_name=GRIPPER,
-                          destination=PoseInFrame(reference_frame="world", pose=Pose(**p)))
+        log_attempt(doc)
+    else:
+        print('DRY RUN: attempt not saved:', doc)
 
 
 async def main():
@@ -33,52 +31,44 @@ async def main():
     home = dict(x=LOOK[0], y=LOOK[1], z=LOOK[2], o_x=0, o_y=0, o_z=-1, theta=THETA)
     robot = await connect()
     try:
-        motion = MotionClient.from_robot(robot, "builtin")
-
-        print("0) start from the saved home pose")
-        await move_to(motion, home, go)
-
-        print("1) find ball")
-        ball = await find_ball(robot, motion, go)
+        controller = MotionController(robot, go)
+        if not go:
+            rims = await observe_rims(robot)
+            controller.event('dry_run', rim_candidates=len(rims),
+                             sequence='remember cup in two views -> pick -> planned transfer -> verify -> release')
+            print('Two-view cup acquisition needs camera motion; no saved cup is reused in dry run.')
+            return
+        await controller.arm.do_command({'set_speed': 10, 'set_acceleration': 20})
+        print('1) locate and remember the nearest cup BEFORE picking')
+        cup_memory = await scan_cup(robot, controller)
+        controller.cup_memory = cup_memory
+        cup = cup_memory.center
+        print('2) find and pick orange ball')
+        ball = await find_ball(robot, controller, go)
         if ball is None:
-            log_attempt({"result": {"hit": False, "failure": "no_ball_found"}})
-            print("no ball found")
+            record_attempt({'result': {'hit': False, 'failure': 'no_ball_found'}}, go)
             return
-
-        print("2) pick")
-        held = await pick(robot, ball, go)
-        if go and not held:
-            log_attempt({"ball": {"pos_mm": ball}, "result": {"hit": False, "failure": "grasp_failed"}})
-            print("pick missed")
-            await move_to(motion, home, go)
+        held = await pick(robot, ball, go, controller=controller)
+        if not held:
+            record_attempt({'ball': {'pos_mm': ball}, 'result': {'hit': False, 'failure': 'grasp_failed'}}, go)
+            await controller.move(home, 'home_after_missed_pick')
             return
-
-        # Zoom out and look across the table at an angle to find the cup:
-        # 30 deg first (closer cups), then 45 deg (far end of the table).
-        print("3) find cup")
-        cup = None
-        for look in CUP_LOOKS:
-            await move_to(motion, look, go)
-            cup = await find_cup(robot)
-            if cup is not None:
-                break
-        if cup is None:
-            print("no cup found - check cup-detector at the cup-look pose; going home holding the ball")
-            await move_to(motion, home, go)
-            return
-        print(f"  cup rim center: {cup[0]:.0f}, {cup[1]:.0f}, {cup[2]:.0f}")
-
-        print("4) drop (centered on the cup)")
-        result = await drop_in_cup(robot, cup, go)
+        controller.event('holding_ball', cup_world_mm=cup)
+        controller.monitor_payload = True
+        print('3) transfer directly to remembered cup; verify before releasing')
+        result = await drop_at_remembered_cup(robot, cup_memory, controller)
 
         print("5) home")
-        await move_to(motion, home, go)
+        await controller.move(home, "home")
 
         hit = None
         if go:
             hit = input("Did it go in? [y/n] ").strip().lower().startswith("y")
-        log_attempt({"phase": "drop", "ball": {"pos_mm": ball}, "cup": {"pos_mm": cup},
-                     "release": result, "result": {"hit": hit}})
+        record_attempt({"phase": "drop", "ball": {"pos_mm": ball}, "cup": {"pos_mm": cup},
+                     "release": result, "result": {"hit": hit}}, go)
+    except Exception as exc:
+        print(f'RUN STOPPED: {exc}. No automatic release or recovery move.')
+        raise
     finally:
         await robot.close()
 

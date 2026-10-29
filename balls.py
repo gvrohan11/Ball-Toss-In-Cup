@@ -4,12 +4,13 @@ find_ball(robot) -> (x, y, z) in mm, world frame, or None.
 Test: python balls.py   (read-only, moves nothing)
 """
 import asyncio
+import os
 
 from viam.proto.common import PoseInFrame
 from viam.services.vision import VisionClient
 
 CAMERA = "cam"
-BALL_3D = "ball-3d"
+BALL_3D = os.getenv("BALL_VISION_SERVICE", "ball-3d")
 
 
 async def find_ball(robot):

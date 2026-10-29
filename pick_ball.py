@@ -17,6 +17,7 @@ How it works (what worked on the real arm):
  5. Hover above the ball, go down to GRAB_Z, close, WAIT for the fingers to stop, lift.
 """
 import asyncio
+import math
 import sys
 
 from viam.components.camera import Camera
@@ -58,7 +59,12 @@ def pose(x, y, z):
 async def move(motion, x, y, z, go):
     print(f"  -> gripper to x={x:.0f} y={y:.0f} z={z:.0f}")
     if go:
-        await motion.move(component_name=GRIPPER, destination=pose(x, y, z))
+        if hasattr(motion, 'event'):
+            await motion.move(dict(x=x, y=y, z=z, o_z=-1, theta=THETA), 'ball_positioning')
+            return
+        succeeded = await motion.move(component_name=GRIPPER, destination=pose(x, y, z))
+        if not succeeded:
+            raise RuntimeError('Gripper motion did not complete; stopping pick sequence')
 
 
 def best_ball(dets):
@@ -69,7 +75,7 @@ def best_ball(dets):
         if w < 20 or h < 20:
             continue
         squareness = min(w, h) / max(w, h)
-        if squareness < 0.6:
+        if squareness < 0.8:
             continue
         if best is None or w * h > (best.x_max - best.x_min) * (best.y_max - best.y_min):
             best = d
@@ -84,6 +90,8 @@ async def locate_ball(robot):
     if d is None:
         return None
     k = (await cam.get_properties()).intrinsic_parameters
+    if k.focal_x_px <= 0 or k.focal_y_px <= 0:
+        raise ValueError('Camera intrinsics must have positive focal lengths')
     u, v = (d.x_min + d.x_max) / 2, (d.y_min + d.y_max) / 2
     size_px = max(d.x_max - d.x_min, d.y_max - d.y_min)
     depth = k.focal_x_px * BALL_DIAMETER_MM / size_px
@@ -91,7 +99,10 @@ async def locate_ball(robot):
                  y=(v - k.center_y_px) / k.focal_y_px * depth,
                  z=depth)
     w = await robot.transform_pose(PoseInFrame(reference_frame=CAMERA, pose=p_cam), "world")
-    return (w.pose.x, w.pose.y, w.pose.z)
+    result = (w.pose.x, w.pose.y, w.pose.z)
+    if not all(math.isfinite(value) for value in result):
+        raise ValueError('Ball localization returned invalid coordinates')
+    return result
 
 
 async def find_ball(robot, motion, go):
@@ -105,6 +116,9 @@ async def find_ball(robot, motion, go):
     fine = await locate_ball(robot) if go else coarse
     if fine is None:
         return None
+    jump = math.hypot(fine[0]-coarse[0], fine[1]-coarse[1])
+    if jump > 30:
+        raise RuntimeError(f'Ball position changed by {jump:.1f} mm between views; descent blocked')
     x, y, z = fine[0] + CAM_CORRECTION_MM[0], fine[1] + CAM_CORRECTION_MM[1], fine[2]
     print(f"  fine ball (corrected): {x:.0f}, {y:.0f}, {z:.0f}")
     return (x, y, z)
@@ -116,16 +130,18 @@ async def wait_gripper(gripper, timeout_s=3.0):
     for _ in range(int(timeout_s / 0.2)):
         await asyncio.sleep(0.2)
         pos = (await gripper.do_command({"get": True})).get("pos")
+        if not isinstance(pos, (int, float)) or not math.isfinite(pos) or not 0 <= pos <= 850:
+            raise RuntimeError('Missing or invalid gripper position; stopping pick sequence')
         still = still + 1 if pos == last else 0
         last = pos
         if still >= 2:
-            break
-    return last
+            return last
+    raise TimeoutError('Gripper did not settle before timeout')
 
 
-async def pick(robot, ball, go):
+async def pick(robot, ball, go, controller=None):
     """Pick the ball at (x, y, _). Returns True if it's in the gripper after lifting."""
-    motion = MotionClient.from_robot(robot, "builtin")
+    motion = controller or MotionClient.from_robot(robot, "builtin")
     gripper = Gripper.from_robot(robot, GRIPPER)
     x, y, _ = ball
     if go:
@@ -137,6 +153,9 @@ async def pick(robot, ball, go):
     await gripper.grab()
     pos = await wait_gripper(gripper)
     print(f"  gripper closed at position {pos}")
+    if pos <= HOLDING_MIN_POS:
+        print('  gripper closed on nothing; not lifting')
+        return False
     await move(motion, x, y, HOVER_Z, go)
     pos = (await gripper.do_command({"get": True})).get("pos")
     held = pos is not None and pos > HOLDING_MIN_POS

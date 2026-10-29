@@ -12,7 +12,7 @@ load_dotenv()
 
 
 async def connect() -> RobotClient:
-    address = os.getenv("VIAM_ADDRESS")
+    address = os.getenv("VIAM_ADDRESS") or os.getenv("VIAM_MACHINE_ADDRESS")
     api_key = os.getenv("VIAM_API_KEY")
     api_key_id = os.getenv("VIAM_API_KEY_ID")
     missing = [n for n, v in [("VIAM_ADDRESS", address), ("VIAM_API_KEY", api_key),

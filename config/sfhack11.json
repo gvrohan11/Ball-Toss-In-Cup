@@ -117,11 +117,11 @@
       "api": "rdk:service:vision",
       "attributes": {
         "camera_name": "cam",
-        "detect_color": "#c0603c",
-        "hue_tolerance_pct": 0.03,
-        "saturation_cutoff_pct": 0.4,
-        "segment_size_px": 800,
-        "value_cutoff_pct": 0.3
+        "detect_color": "#dc8650",
+        "hue_tolerance_pct": 0.04,
+        "saturation_cutoff_pct": 0.5,
+        "segment_size_px": 400,
+        "value_cutoff_pct": 0.25
       },
       "model": "rdk:builtin:color_detector",
       "name": "ball-detector"
