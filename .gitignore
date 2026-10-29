@@ -5,3 +5,5 @@ __pycache__/
 .claude/
 .vscode/
 observations/
+.cup-models/
+.yolo-config/

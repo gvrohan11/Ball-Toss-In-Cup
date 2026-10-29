@@ -175,3 +175,43 @@ configuration JSON. Each teammate should use credentials they are authorized to 
 
 References: [Viam Python setup](https://docs.viam.com/build-apps/setup/python/)
 and [Viam MCP server](https://docs.viam.com/reference/mcp/).
+
+### Multicolor balls on a plate (read-only CPU prototype)
+
+For known 40 mm ping-pong balls, the geometry backend uses color-independent
+circle proposals followed by a fixed-radius sphere fit in aligned RGB-D data.
+It needs no neural model or GPU. Run with the plate's image rectangle:
+
+```bash
+.conda/bin/python scripts/inspect_plate.py --backend geometry --plate-roi 570 215 920 565
+```
+
+The example rectangle is specific to the captured setup; update it when the
+plate or camera moves. The script reads the camera and arm pose, transforms
+accepted centers through Viam's configured frame tree, rejects arm movement
+during capture, and saves images and JSON under ignored `observations/`.
+It never moves the arm. `grasp_ready` and `motion_ready` remain false.
+A fitted sphere is a geometric candidate, not a semantic guarantee: plate
+patterns, occlusion, invalid depth, and other spherical objects need validation.
+The current saved scene yields four candidates matching the two white and two
+orange balls. This is a single-scene check, not validation of arbitrary piles.
+
+Do not feed these coordinates directly into the current orange-only picking
+loop. Plate/rim clearance, gripper opening and approach direction, neighbor
+collisions, and held-ball verification for other colors still need integration.
+The reported neighbor gaps are diagnostics, not a collision-free grasp plan.
+
+The optional YOLO backend is for comparison and cup/ball experiments:
+
+```bash
+.conda/bin/python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+.conda/bin/python -m pip install -r requirements-yolo.txt
+YOLO_CONFIG_DIR="$PWD/.yolo-config" MPLCONFIGDIR=/tmp/ball-toss-mpl .conda/bin/python scripts/inspect_plate.py --backend yolo --plate-roi 570 215 920 565
+```
+
+YOLO inference explicitly uses CPU. Its default pretrained YOLO11 segmentation
+model missed the ping-pong balls in the full-frame check; a diagnostic crop
+classified orange balls as fruit and missed white balls. It is therefore not
+the default plate-ball detector. If a learned detector becomes necessary,
+fine-tune with labeled images of this setup on a GPU, then validate CPU inference
+on the deployment machine. No fine-tuning has been performed.
