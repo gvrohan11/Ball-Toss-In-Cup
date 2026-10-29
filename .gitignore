@@ -5,3 +5,5 @@
 __pycache__/
 .env
 .claude/
+.venv-cups/
+.cup-models/

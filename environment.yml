@@ -4,10 +4,12 @@ channels:
 dependencies:
   - python=3.11
   - pip
-  - numpy
-  - scipy
-  - matplotlib
   - pip:
+      # Pip numeric wheels avoid the duplicate Conda/PyTorch OpenMP runtime on macOS.
+      - numpy==2.4.6
+      - scipy==1.17.1
+      - matplotlib
+      - ultralytics==8.4.192
       - viam-sdk==0.85.1
       - xarm-python-sdk==1.18.4
       - opencv-python
