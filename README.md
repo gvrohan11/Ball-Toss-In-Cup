@@ -1,6 +1,26 @@
 # Ball-Toss-In-Cup
 Program to make a ufactory A850 robot throw a ball into a cup
 
+## Quick start (what we demo)
+
+```
+pip install viam-sdk==0.85.1 python-dotenv pymongo opencv-python numpy
+cp .env.example .env        # fill VIAM_ADDRESS / VIAM_API_KEY / VIAM_API_KEY_ID / MONGODB_URI
+python check_connection.py  # read-only check
+python main.py              # dry run: prints the plan, moves nothing, logs nothing
+python main.py --go         # live: home -> find + pick ball -> scan for cup -> drop -> home
+python main.py --go --autotune   # also correct the aim from recent misses stored in Atlas
+python dashboard.py --watch      # live hit-rate dashboard from Atlas (second screen)
+python -m pytest -q tests        # offline tests, no robot
+```
+
+How it works: [TASKS.md](TASKS.md) (status, calibrations), [DASHBOARD.md](DASHBOARD.md)
+(Atlas), [DEMO.md](DEMO.md) (2-minute demo script).
+
+Safety: every run starts at the home pose, checks the gripper first, uses Viam motion
+planning (table/wall/ceiling obstacles), and if anything fails while holding the ball it
+puts the ball back and goes home. Someone stays on the E-stop.
+
 ## Python environment
 
 Uses Python 3.11 and the Viam Python SDK to access the arm through Viam,

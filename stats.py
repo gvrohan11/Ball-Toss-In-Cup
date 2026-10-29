@@ -3,6 +3,7 @@
     python stats.py                 # all sessions
     python stats.py --session thu-1405
     python stats.py --seed-today    # one time: store the 5 hand-driven drops from Oct 29
+    python stats.py --clean         # delete self-tests and dry-run entries (hit = None)
 """
 import sys
 from datetime import datetime, timezone
@@ -29,7 +30,22 @@ def seed_today():
                      "notes": note, "driven": "move-by-move via Viam MCP"})
 
 
+def clean():
+    """Remove logger self-tests and dry-run/unknown-result entries. Real attempts stay."""
+    from logger import _get_collection
+    col = _get_collection()
+    if col is None:
+        print("no MONGODB_URI - nothing to clean")
+        return
+    q = {"$or": [{"phase": "test"}, {"result.hit": None}, {"result": {"$exists": False}}]}
+    n = col.count_documents(q)
+    col.delete_many(q)
+    print(f"removed {n} test/dry-run entries")
+
+
 def main():
+    if "--clean" in sys.argv:
+        clean()
     if "--seed-today" in sys.argv:
         seed_today()
     session = sys.argv[sys.argv.index("--session") + 1] if "--session" in sys.argv else None
