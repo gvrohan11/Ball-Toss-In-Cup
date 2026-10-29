@@ -82,8 +82,36 @@ async def scan_for_cup(motion, robot, go):
     return None
 
 
+# Where to set down a ball found in the gripper at startup: clear table near the robot.
+SET_DOWN_XY = (420, 0)
+
+
+async def release_if_holding(robot, motion, go):
+    """Start-of-run check: if the gripper is holding something (left over from an
+    interrupted run), set it down on the table, open, and lift. Always ends open."""
+    from viam.components.gripper import Gripper
+    from pick_ball import GRAB_Z, HOLDING_MIN_POS, HOVER_Z
+    gripper = Gripper.from_robot(robot, GRIPPER)
+    try:
+        pos = (await gripper.do_command({"get": True})).get("pos")
+    except Exception:
+        pos = None
+    holding = pos is not None and HOLDING_MIN_POS < pos < 800
+    print(f"  gripper position {pos}: {'HOLDING something - setting it down' if holding else 'empty'}")
+    if holding:
+        x, y = SET_DOWN_XY
+        await move_to(motion, dict(x=x, y=y, z=HOVER_Z, o_x=0, o_y=0, o_z=-1, theta=THETA), go)
+        await move_to(motion, dict(x=x, y=y, z=GRAB_Z + 10, o_x=0, o_y=0, o_z=-1, theta=THETA), go)
+    if go:
+        await gripper.open()
+    if holding:
+        await move_to(motion, dict(x=x, y=y, z=HOVER_Z, o_x=0, o_y=0, o_z=-1, theta=THETA), go)
+
+
 async def run_once(robot, motion, go, home, t0):
     print("0) start from the saved home pose")
+    await move_to(motion, home, go)
+    await release_if_holding(robot, motion, go)
     await move_to(motion, home, go)
 
     print("1) find ball")
