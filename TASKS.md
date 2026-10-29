@@ -10,7 +10,17 @@
 | Rohan | Cup detection | `cups.py` → `get_cups(robot)` |
 | MongoDB teammate | Logging and dashboard | `logger.py` → `log_attempt(doc)` |
 
-## Where we are (Thu ~1 PM)
+## Update (Thu ~2 PM): full loop works, 4/4 drops in the cup
+- `python main.py --go`: home → find + pick ball → 30°/45° look → find cup → drop → home.
+- Pick: center the camera over the ball, correction (-15, +20) mm at wrist θ=180, grab at z=70, wait for fingers.
+- Drop: gripper tilted forward (o = 0.7, 0, -0.7), released ~19 cm above the rim. Reaches cups ~70–95 cm out.
+- Home pose: x=350 y=0 z=445, pointing down, θ=180 (camera image upright).
+- Ceiling obstacle raised to 1250 mm on sfhack11 (watch the camera cable).
+- **Rohan:** the angled views (`cup_aim.CUP_LOOKS`) show the red sides. Gap: with the ball held,
+  the ball can hide the red side → cup-detector misses. Needs rim detection or YOLO "cup".
+- **Ball teammate:** ball-detector sometimes boxes only the glare spot; `pick_ball.best_ball` filters.
+
+## Where we were (Thu ~1 PM)
 - Machine **sfhack11** (xArm850, RealSense on the wrist, 2-finger gripper). Obstacles: table, ceiling, wall-back, wall-left.
 - **Look pose** (camera straight down at the table): arm `x=350 y=0 z=550 o=(0,0,-1) θ=0`. Gripper tip is about 105 mm lower.
 - Vision services in the Viam config:

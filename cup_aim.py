@@ -24,9 +24,13 @@ CAMERA = "cam"
 CUP_DETECTOR = "cup-detector"
 
 # Gripper pose for looking at the far end of the table.
-CUP_LOOK = dict(x=550, y=0, z=650, o_x=0.7, o_y=0, o_z=-0.7, theta=180)
-# Fallback: tilted further forward, so the held ball sits lower / out of the camera view.
-CUP_LOOK_FAR = dict(x=550, y=0, z=650, o_x=0.8, o_y=0, o_z=-0.6, theta=180)
+# Scan these tilts in order. 30 deg sees ~50-90 cm out, 45 deg sees ~87-130 cm out.
+# (A fixed 45 deg view missed a cup placed at ~78 cm.)
+CUP_LOOK_30 = dict(x=550, y=0, z=650, o_x=0.5, o_y=0, o_z=-0.866, theta=180)
+CUP_LOOK_45 = dict(x=550, y=0, z=650, o_x=0.7, o_y=0, o_z=-0.7, theta=180)
+CUP_LOOKS = (CUP_LOOK_30, CUP_LOOK_45)
+CUP_LOOK = CUP_LOOK_45       # kept for older imports
+CUP_LOOK_FAR = CUP_LOOK_30
 
 TABLE_Z = -10              # real tabletop height (fingers hit the table lower than the config's -23)
 CUP_HEIGHT_MM = 120        # rim height above the table
@@ -36,6 +40,9 @@ CUP_BASE_RADIUS_MM = 30
 # twice was released at (870, 20). Correction = truth - vision. Assumes the cup had not
 # moved between the drops and the measurement - re-check with a moved cup.
 CUP_CORRECTION_MM = (-56, 17)  # 3rd drop at y=+25 went in but slightly off-center in y; trimmed
+# Same correction used from the 30 deg view (4th drop, cup at ~78 cm): it went in.
+# Known gap: with the ball held, the ball can hide the cup's red side and cup-detector
+# returns nothing. Next: measure the white rim (OpenCV) or use YOLO "cup" (Rohan).
 
 
 def best_cup(dets):

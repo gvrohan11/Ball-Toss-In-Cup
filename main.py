@@ -14,7 +14,7 @@ from viam.proto.common import Pose, PoseInFrame
 from viam.services.motion import MotionClient
 
 from connection import connect
-from cup_aim import CUP_LOOK, CUP_LOOK_FAR, find_cup
+from cup_aim import CUP_LOOKS, find_cup
 from drop import drop_in_cup
 from logger import log_attempt
 from pick_ball import GRIPPER, LOOK, THETA, find_ball, pick
@@ -53,12 +53,11 @@ async def main():
             await move_to(motion, home, go)
             return
 
-        # Zoom out and look across the table at an angle to find the cup.
-        # The held ball can be in view and has thrown off cup-detector once, so
-        # retry with the camera tilted further forward before giving up.
+        # Zoom out and look across the table at an angle to find the cup:
+        # 30 deg first (closer cups), then 45 deg (far end of the table).
         print("3) find cup")
         cup = None
-        for look in (CUP_LOOK, CUP_LOOK_FAR):
+        for look in CUP_LOOKS:
             await move_to(motion, look, go)
             cup = await find_cup(robot)
             if cup is not None:
