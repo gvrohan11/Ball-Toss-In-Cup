@@ -35,6 +35,9 @@ async def main():
     try:
         motion = MotionClient.from_robot(robot, "builtin")
 
+        print("0) start from the saved home pose")
+        await move_to(motion, home, go)
+
         # Find the cup FIRST, while the gripper is empty: a held orange ball in view
         # throws off cup-detector.
         print("1) find cup")
