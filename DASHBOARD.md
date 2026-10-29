@@ -41,3 +41,17 @@ Data: database `balltoss`, collection `attempts` (written by `logger.py`).
 
 Judges' angle: `suggest_offset()` reads the recent misses back out of Atlas and returns
 a correction for the next drop - the robot tunes its own aim from its logged data.
+
+## 4. Telemetry on each attempt (`telemetry` field)
+Every live attempt also stores a timeline, so misses can be explained and the throw tuned:
+- `telemetry.events[]`: `t` (s from start), `stage` (home, ball_measured, after_pick,
+  cup_view_N, released…), `joints_deg` (6 joints), `gripper_pose` (world x/y/z + orientation),
+  `finger_pos`, plus stage details (ball/cup position, which scan view found the cup).
+- `telemetry.moves[]`: every planned move with target, success and seconds.
+- `telemetry.phases`: seconds spent in start / find_ball / pick / cup_scan / drop.
+- `telemetry.images[]`: small JPEG thumbnails of the ball view and the cup view.
+- `telemetry.config`: corrections, heights, autotune flag and git commit used for the run.
+
+Example queries (Atlas Data Explorer): average scan time
+`[{ $group: { _id: null, s: { $avg: "$telemetry.phases.cup_scan" } } }]`;
+which scan view finds the cup: filter `telemetry.events.found: true`.
