@@ -55,5 +55,15 @@ Get the machine address and credentials from its CONNECT tab in the Viam app.
 Keep API keys in a local `.env` file (ignored by Git), never in shared machine
 configuration JSON. Each teammate should use credentials they are authorized to use.
 
+## Connecting to the robot
+
+1. `cp .env.example .env` and fill in `VIAM_ADDRESS`, `VIAM_API_KEY`, `VIAM_API_KEY_ID`
+   from sfhack11 -> CONNECT -> Python (turn on "Include API key").
+2. `python check_connection.py` - read-only: lists resources, arm pose, ball/cup detections.
+3. In your own code: `from connection import connect` then `robot = await connect()`.
+
+`pick_ball.py` is a dry run by default; `python pick_ball.py --go` moves the arm
+(someone on the E-stop).
+
 References: [Viam Python setup](https://docs.viam.com/build-apps/setup/python/)
 and [Viam MCP server](https://docs.viam.com/reference/mcp/).
