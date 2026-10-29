@@ -33,7 +33,7 @@ CUP_BASE_RADIUS_MM = 30
 # Measured Oct 29: this method said the cup center was at (926, -5); the drop that scored
 # twice was released at (870, 20). Correction = truth - vision. Assumes the cup had not
 # moved between the drops and the measurement - re-check with a moved cup.
-CUP_CORRECTION_MM = (-56, 25)
+CUP_CORRECTION_MM = (-56, 17)  # 3rd drop at y=+25 went in but slightly off-center in y; trimmed
 
 
 def best_cup(dets):

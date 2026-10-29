@@ -35,28 +35,30 @@ async def main():
     try:
         motion = MotionClient.from_robot(robot, "builtin")
 
-        print("1) find ball")
-        ball = await find_ball(robot, motion, go)
-        if ball is None:
-            log_attempt({"result": {"hit": False, "failure": "no_ball_found"}})
-            print("no ball found")
-            return
-
-        print("2) pick")
-        held = await pick(robot, ball, go)
-        if go and not held:
-            log_attempt({"ball": {"pos_mm": ball}, "result": {"hit": False, "failure": "grasp_failed"}})
-            print("pick missed")
-            await move_to(motion, home, go)
-            return
-
-        print("3) find cup")
+        # Find the cup FIRST, while the gripper is empty: a held orange ball in view
+        # throws off cup-detector.
+        print("1) find cup")
         await move_to(motion, CUP_LOOK, go)
         cup = await find_cup(robot)
         if cup is None:
             print("no cup found - check cup-detector at the cup-look pose")
             return
         print(f"  cup rim center: {cup[0]:.0f}, {cup[1]:.0f}, {cup[2]:.0f}")
+
+        print("2) find ball")
+        ball = await find_ball(robot, motion, go)
+        if ball is None:
+            log_attempt({"result": {"hit": False, "failure": "no_ball_found"}})
+            print("no ball found")
+            return
+
+        print("3) pick")
+        held = await pick(robot, ball, go)
+        if go and not held:
+            log_attempt({"ball": {"pos_mm": ball}, "result": {"hit": False, "failure": "grasp_failed"}})
+            print("pick missed")
+            await move_to(motion, home, go)
+            return
 
         print("4) drop")
         result = await drop_in_cup(robot, cup, go)
