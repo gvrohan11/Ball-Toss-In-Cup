@@ -34,9 +34,16 @@ GRIPPER = "gripper"
 BALL_DIAMETER_MM = 40
 # Gripper poses, world frame, mm. Gripper points straight down.
 LOOK = (350, 0, 445)
+# Wrist rotation for every move. 180 = camera image upright (far end of table at the top).
+# The calibration below was MEASURED at theta=0; at theta=180 the camera sits on the
+# other side of the gripper, so both offsets flip sign.
+THETA = 180
 MEASURE_HEIGHT_Z = 160      # gripper z when the camera is centered over the ball (camera ~250 mm above table)
-CAM_OFFSET_XY = (83, 14)    # gripper xy minus camera xy at theta=0 (puts the camera over a point)
-CAM_CORRECTION_MM = (0, -20)  # measured: camera estimate was 2 cm off in +y
+_CAM_OFFSET_THETA0 = (83, 14)     # gripper xy minus camera xy, measured at theta=0
+_CAM_CORRECTION_THETA0 = (0, -20)  # measured at theta=0: camera estimate was 2 cm off in +y
+_SIGN = 1 if THETA == 0 else -1
+CAM_OFFSET_XY = (_SIGN * _CAM_OFFSET_THETA0[0], _SIGN * _CAM_OFFSET_THETA0[1])
+CAM_CORRECTION_MM = (_SIGN * _CAM_CORRECTION_THETA0[0], _SIGN * _CAM_CORRECTION_THETA0[1])  # TODO: re-verify at theta=180
 HOVER_Z = 150
 GRAB_Z = 70                 # fingers swing DOWN while closing; lower than ~60 drags them on the table
 HOLDING_MIN_POS = 50        # gripper position below this after closing = closed on nothing
@@ -44,7 +51,7 @@ HOLDING_MIN_POS = 50        # gripper position below this after closing = closed
 
 def pose(x, y, z):
     return PoseInFrame(reference_frame="world",
-                       pose=Pose(x=x, y=y, z=z, o_x=0, o_y=0, o_z=-1, theta=0))
+                       pose=Pose(x=x, y=y, z=z, o_x=0, o_y=0, o_z=-1, theta=THETA))
 
 
 async def move(motion, x, y, z, go):

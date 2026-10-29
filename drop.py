@@ -30,7 +30,7 @@ def release_pose(cup):
     cx, cy, cz = cup
     x, y, z = cx + OFFSET_X_MM, cy + OFFSET_Y_MM, cz + RELEASE_ABOVE_RIM_MM
     if x <= STRAIGHT_DOWN_MAX_X_MM:
-        return dict(x=x, y=y, z=z, o_x=0, o_y=0, o_z=-1, theta=0)
+        return dict(x=x, y=y, z=z, o_x=0, o_y=0, o_z=-1, theta=180)
     return dict(x=x, y=y, z=z, o_x=0.7, o_y=0, o_z=-0.7, theta=180)
 
 
