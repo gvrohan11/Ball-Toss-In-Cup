@@ -43,7 +43,8 @@ _CAM_OFFSET_THETA0 = (83, 14)     # gripper xy minus camera xy, measured at thet
 _CAM_CORRECTION_THETA0 = (0, -20)  # measured at theta=0: camera estimate was 2 cm off in +y
 _SIGN = 1 if THETA == 0 else -1
 CAM_OFFSET_XY = (_SIGN * _CAM_OFFSET_THETA0[0], _SIGN * _CAM_OFFSET_THETA0[1])
-CAM_CORRECTION_MM = (_SIGN * _CAM_CORRECTION_THETA0[0], _SIGN * _CAM_CORRECTION_THETA0[1])  # TODO: re-verify at theta=180
+# Measured at theta=180 on the 2nd pick: flipped y (+20) was right, plus ~1.5 cm back toward the base in x.
+CAM_CORRECTION_MM = _CAM_CORRECTION_THETA0 if THETA == 0 else (-15, 20)
 HOVER_Z = 150
 GRAB_Z = 70                 # fingers swing DOWN while closing; lower than ~60 drags them on the table
 HOLDING_MIN_POS = 50        # gripper position below this after closing = closed on nothing
