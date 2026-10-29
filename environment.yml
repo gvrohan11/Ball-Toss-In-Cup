@@ -1,0 +1,14 @@
+name: ball-toss
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - numpy
+  - scipy
+  - matplotlib
+  - pip:
+      - viam-sdk==0.85.1
+      - xarm-python-sdk==1.18.4
+      - opencv-python
+      - python-dotenv

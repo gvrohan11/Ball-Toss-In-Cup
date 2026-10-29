@@ -1,1 +1,7 @@
 
+
+.conda/
+.conda-pkgs/
+__pycache__/
+.env
+.claude/
