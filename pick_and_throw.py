@@ -34,7 +34,8 @@ HOME = dict(x=LOOK[0], y=LOOK[1], z=LOOK[2], o_x=0, o_y=0, o_z=-1, theta=THETA)
 MAX_TRIES_PER_CUP = 3     # misses at one cup before --fill-cups moves on to the next
 MAX_PICK_FAILS = 3        # failed picks in a row before stopping
 
-PROMPT = ("Result? 'in' (target) or 'in 3' (went into cup 3) | 'rim' or 'rim 3' (bounced out) | "
+RIM_CM = 4.0      # 'rim front' / 'rim back' = landed about this far short / long of the cup centre
+PROMPT = ("Result? 'in' (target) or 'in 3' (went into cup 3) | 'rim front' / 'rim back' (bounced out) | "
           "cm long(+)/short(-), optionally ',left(+)/right(-) cm' e.g. '12' or '-8,3' | "
           "'drop' (fell out early) | blank = skip: ")
 
@@ -49,7 +50,12 @@ def parse_landing(s):
     words = re.findall(r"[a-z]+", s)
     nums = [float(x) for x in re.findall(r"-?\d+(?:\.\d+)?", s)]
     if "rim" in words or any(w.startswith("bounce") for w in words):
-        res = {"hit": False, "outcome": "rim_out", "long_cm": 0.0}
+        # which rim: front = landed short of the centre, back = long (cup opening radius ~4.7 cm)
+        side = -RIM_CM if any(w in ("front", "near", "short") for w in words) else \
+            RIM_CM if any(w in ("back", "far", "long") for w in words) else 0.0
+        res = {"hit": False, "outcome": "rim_out", "long_cm": side}
+        if side:
+            res["rim_side"] = "front" if side < 0 else "back"
         if nums:
             res["rim_cup"] = int(abs(nums[0]))
         return res
@@ -154,7 +160,9 @@ async def throw_at(robot, motion, args, go, pl, cup, t0):
     cup_doc = None
     if cup is not None:
         cup_doc = {"number": cup.get("number"), "pos_mm": list(cup["pos_mm"]), "dist_mm": round(_dist(cup)),
-                   "of": cup.get("of")}
+                   "of": cup.get("of"),
+                   # the whole survey, numbered right -> left, so the dashboard can draw every cup
+                   "survey": [[round(v) for v in c["pos_mm"][:2]] for c in cup.get("survey", [])]}
     doc = {"phase": "throw", "ball": {"pos_mm": ball}, "cup": cup_doc, "throw": info,
            "duration_s": round(time.monotonic() - t0, 1), "result": landing}
     try:
@@ -236,6 +244,7 @@ async def run(args):
         await move_to(motion, HOME, go, "home")
         for c in cups:
             c["of"] = len(cups)
+            c["survey"] = cups
         targets = [c for c in cups if c["reachable"]]
         if args.survey_only:
             print(f"SURVEY ONLY: {len(cups)} cup(s), {len(targets)} in the {preset} band: "

@@ -34,8 +34,10 @@ def landing_mm(doc):
     outcome = r.get("outcome")
     if outcome in ("dropped", "wide_unknown"):
         return None
-    if r.get("hit") is True or outcome in ("in", "rim_out"):
+    if r.get("hit") is True or (outcome == "rim_out" and not r.get("long_cm")):
         return float(d)
+    if outcome == "rim_out":                 # "rim front" / "rim back": short / long by ~a cup radius
+        return d + 10.0 * r["long_cm"]
     long_cm = r.get("long_cm")
     if long_cm is None:
         return None
