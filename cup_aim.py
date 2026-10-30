@@ -101,6 +101,7 @@ async def _pixel_to_table(robot, k, u, v, z_world):
 RIM_CORRECTION_MM = (-52, 16)
 # Straight-down views: the camera error measured on the ball picks at theta=180.
 TOPDOWN_CORRECTION_MM = (-15, 20)
+MAX_CUP_REACH_MM = 950        # farthest cup that scored was 870 from the base; beyond ~950 is a false hit
 RIM_WIDTH_OK_MM = (70, 130)   # a solo cup opening is ~95 mm; reject blobs far off that
 
 
@@ -133,6 +134,9 @@ async def find_cup_by_rim(robot, topdown=False):
             print(f"  [cup] rim candidate rejected: {width:.0f} mm wide")
             continue
         (x, y, z), _ = c
+        if math.hypot(x, y) > MAX_CUP_REACH_MM:
+            print(f"  [cup] rim candidate at ({x:.0f}, {y:.0f}) is out of the arm's reach; ignoring it")
+            continue
         print(f"  [cup] rim found, {width:.0f} mm wide, red {r['red_fraction']:.0%}")
         corr = TOPDOWN_CORRECTION_MM if topdown else RIM_CORRECTION_MM
         return (x + corr[0], y + corr[1], z)

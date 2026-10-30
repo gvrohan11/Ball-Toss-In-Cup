@@ -191,3 +191,44 @@ def test_telemetry_records_timeline(rig, monkeypatch):
     monkeypatch.setattr(logger, "_collection", mongomock.MongoClient()["balltoss"]["attempts"])
     logger.log_attempt(doc)                     # stores cleanly, incl. binary thumbnail
     assert logger._collection.count_documents({"telemetry.events.stage": "released"}) == 1
+
+
+def test_rim_beyond_reach_is_ignored(monkeypatch):
+    """A false rim far past the arm's reach (seen live at x=1241) must not end the scan."""
+    import cup_rim
+
+    async def frame(robot):
+        return object()
+
+    async def props(self):
+        class P:
+            class intrinsic_parameters:
+                focal_x_px = center_x_px = focal_y_px = center_y_px = 1.0
+        return P
+
+    spots = iter([(1241.0, 168.0), (729.0, -86.0)])
+
+    async def table(robot, k, u, v, z):
+        return (next(spots)[0:2] + (z,)), (0, 0)
+
+    class Cam:
+        async def get_properties(self):
+            return await props(self)
+
+    monkeypatch.setattr(cup_aim, "_color_frame", frame)
+    monkeypatch.setattr(cup_aim.Camera, "from_robot", staticmethod(lambda r, n: Cam()))
+    monkeypatch.setattr(cup_rim, "find_cup_rims",
+                        lambda f: [dict(u=1, v=1, box=(0, 0, 1, 1), red_fraction=0.3)] * 2)
+    calls = []
+
+    async def pix(robot, k, u, v, z):
+        calls.append(1)
+        n = len(calls)
+        # candidate 1: (1241,168) for centre/left/right; candidate 2: (729,-86), widths ~95 mm
+        base = (1241.0, 168.0) if n <= 3 else (729.0, -86.0)
+        dx = {1: 0, 2: -47, 3: 47, 4: 0, 5: -47, 6: 47}[n]
+        return (base[0] + dx, base[1], z), (0, 0)
+
+    monkeypatch.setattr(cup_aim, "_pixel_to_table", pix)
+    cup = asyncio.run(cup_aim.find_cup_by_rim(object()))
+    assert cup is not None and round(cup[0]) == 729 - 52
