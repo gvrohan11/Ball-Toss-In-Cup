@@ -174,3 +174,15 @@ def test_far_dry_run(monkeypatch):
     out = asyncio.run(throw.throw(object(), 850, False, 1.0, True, fp["release_delay_s"], fp["swing_deg"],
                                   fp["speed_dps"], fp["accel_dps2"], None, fp["start_j"], -9.1, fp["gripper_speed"]))
     assert out["dry_run"] is True
+
+
+def test_whip_inside_limits_and_faster_table():
+    start = [0.0, throw.WHIP_START_J[0], throw.WHIP_START_J[1], 0.0, throw.WHIP_START_J[2], 0.0]
+    end = list(start)
+    for j, d in throw.WHIP_SWING.items():
+        end[j] += d
+    throw.check_limits(start, end)
+    assert 90 <= throw.far_speed_for(850, "whip") < 110
+    assert throw.far_speed_for(5000, "whip") == 180.0
+    fp = throw.far_params(850, preset="whip")
+    assert fp["start_j"] == throw.WHIP_START_J and fp["gripper_speed"] == 5000

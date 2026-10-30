@@ -217,14 +217,13 @@ async def throw(robot, distance_mm, go, scale=1.0, release=True, release_delay_s
 LOB_RELEASE_RADIUS_MM = 480   # about where the lob lets go, measured from the base (landed on the cup's distance)
 
 
-def yaw_for_cup(x, y):
+def yaw_for_cup(x, y, warn=True):
     """Base rotation (deg) that points the lob plane at a cup at world (x, y) mm; also warns on distance."""
     import math
     yaw = math.degrees(math.atan2(y, x))
     r = math.hypot(x, y)
-    print(f"   aim: cup at ({x:.0f}, {y:.0f}) -> yaw {yaw:+.1f} deg, {r:.0f} mm from the base "
-          f"(lob lands ~{LOB_RELEASE_RADIUS_MM} mm out)")
-    if abs(r - LOB_RELEASE_RADIUS_MM) > 80:
+    print(f"   aim: cup at ({x:.0f}, {y:.0f}) -> yaw {yaw:+.1f} deg, {r:.0f} mm from the base")
+    if warn and abs(r - LOB_RELEASE_RADIUS_MM) > 80:
         print("!! cup is more than 8 cm from where the lob lands: move the cup to ~48 cm from the base")
     return yaw
 
@@ -248,31 +247,51 @@ FAR_TABLE = [(105, 837), (120, 866), (135, 895), (150, 924), (165, 953), (180, 9
 FAR_OPEN_LEAD_S = 0.43    # gripper starts moving ~0.3 s after open(); have it open ~0.13 s before braking
 
 
-def far_speed_for(distance_mm):
-    """Swing speed (deg/s) whose model landing is distance_mm from the base (clamped to 100-180)."""
-    t = FAR_TABLE
+# WHIP: wrist-whip throw, ~2x the FAR ball speed (1.9 m/s at 180 deg/s), launched ~42-53 deg up.
+# Same optimizer, but the ball is HELD until the fingers open (timed release), so the wrist can
+# add speed the flange limit doesn't see. Start: ball (367, 0, 561), fingers down. End: (671, 0, 795).
+# Release (start of braking) ~(577, 0, 683). Flange 1.12 m/s at 180 deg/s (limit ~1.26-1.44).
+# Model landing x0.9 (the FAR throw landed ~10% shorter than its model at 150 deg/s).
+WHIP_START_J = (3.6, -75.5, -91.1)
+WHIP_SWING = {1: -16.2, 2: -38.1, 4: +37.9}
+WHIP_TABLE = [(s, round(d * 0.9)) for s, d in
+              [(90, 897), (100, 931), (110, 966), (120, 1004), (135, 1065), (150, 1129), (165, 1197), (180, 1266)]]
+WHIP_OPEN_LEAD_S = 0.40   # ball should be free right as the arm starts braking (fastest point)
+
+PRESETS = {
+    "far": dict(start_j=FAR_START_J, swing=FAR_SWING, table=FAR_TABLE, lead=FAR_OPEN_LEAD_S, min_speed=100.0),
+    "whip": dict(start_j=WHIP_START_J, swing=WHIP_SWING, table=WHIP_TABLE, lead=WHIP_OPEN_LEAD_S, min_speed=90.0),
+}
+
+
+def far_speed_for(distance_mm, preset="far"):
+    """Swing speed (deg/s) whose landing is distance_mm from the base (clamped to min-180)."""
+    t = PRESETS[preset]["table"]
+    lo = PRESETS[preset]["min_speed"]
     if distance_mm <= t[0][1]:
-        return max(100.0, t[0][0] - (t[0][1] - distance_mm) / ((t[1][1] - t[0][1]) / (t[1][0] - t[0][0])))
+        return max(lo, t[0][0] - (t[0][1] - distance_mm) / ((t[1][1] - t[0][1]) / (t[1][0] - t[0][0])))
     for (s0, d0), (s1, d1) in zip(t, t[1:]):
         if distance_mm <= d1:
             return s0 + (s1 - s0) * (distance_mm - d0) / (d1 - d0)
     return 180.0
 
 
-def far_release_delay(speed_dps, accel=FAR_ACCEL):
+def far_release_delay(speed_dps, accel=FAR_ACCEL, preset="far"):
     """Open-command time (s from swing start, negative = before) for the arm's braking point."""
-    dmax = max(abs(v) for v in FAR_SWING.values())
+    dmax = max(abs(v) for v in PRESETS[preset]["swing"].values())
     t_brake = speed_dps / accel + (dmax - speed_dps ** 2 / accel) / speed_dps
-    return t_brake - FAR_OPEN_LEAD_S
+    return t_brake - PRESETS[preset]["lead"]
 
 
-def far_params(distance_mm, speed=None, accel=None, release_delay_s=None):
-    speed = speed or far_speed_for(distance_mm)
+def far_params(distance_mm, speed=None, accel=None, release_delay_s=None, preset="far"):
+    p = PRESETS[preset]
+    speed = speed or far_speed_for(distance_mm, preset)
     accel = accel or FAR_ACCEL
-    delay = far_release_delay(speed, accel) if release_delay_s is None else release_delay_s
-    print(f"   FAR: cup {distance_mm:.0f} mm -> {speed:.0f} deg/s, open at {delay:+.2f} s, gripper speed {FAR_GRIPPER_SPEED}")
-    return dict(speed_dps=speed, accel_dps2=accel, release_delay_s=delay, swing_deg=dict(FAR_SWING),
-                start_j=FAR_START_J, gripper_speed=FAR_GRIPPER_SPEED)
+    delay = far_release_delay(speed, accel, preset) if release_delay_s is None else release_delay_s
+    print(f"   {preset.upper()}: cup {distance_mm:.0f} mm -> {speed:.0f} deg/s, open at {delay:+.2f} s, "
+          f"gripper speed {FAR_GRIPPER_SPEED}")
+    return dict(speed_dps=speed, accel_dps2=accel, release_delay_s=delay, swing_deg=dict(p["swing"]),
+                start_j=p["start_j"], gripper_speed=FAR_GRIPPER_SPEED)
 
 
 def swing_from_args(a):
@@ -318,6 +337,8 @@ async def _main():
                     help="wind-up height mm (default 450). Higher start = longer swing path = a higher lob (try 650)")
     ap.add_argument("--far", action="store_true",
                     help="open-hand forward toss for a cup 84-98 cm from the base (speed picked from --distance)")
+    ap.add_argument("--whip", action="store_true",
+                    help="wrist-whip throw, ~2x faster, 42-53 deg up (cup ~85-115 cm; speed from --distance)")
     ap.add_argument("--yaw", type=float, default=0.0, help="turn the lob toward +y by this many deg (--lob only)")
     ap.add_argument("--lob", action="store_true",
                     help="near-vertical full-speed toss (cup ~50 cm from the base); see LOB_* in this file")
@@ -329,8 +350,8 @@ async def _main():
         print("Refusing to throw live without --i-checked-with-staff (direct joint move, no obstacle checks).")
     robot = await connect()
     try:
-        if a.far:
-            fp = far_params(a.distance, a.speed, a.accel, a.release_delay)
+        if a.far or a.whip:
+            fp = far_params(a.distance, a.speed, a.accel, a.release_delay, "whip" if a.whip else "far")
             print(await throw(robot, a.distance, go, a.scale, not a.no_release, fp["release_delay_s"],
                               fp["swing_deg"], fp["speed_dps"], fp["accel_dps2"], None, fp["start_j"], a.yaw,
                               fp["gripper_speed"]))
