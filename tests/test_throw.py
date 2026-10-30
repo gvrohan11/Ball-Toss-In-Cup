@@ -151,3 +151,26 @@ def test_yaw_needs_lob_and_is_limited(monkeypatch):
         asyncio.run(throw.throw(object(), 500, False, swing_deg=throw.LOB_SWING, start_j=throw.LOB_START_J, yaw_deg=60))
     out = asyncio.run(throw.throw(object(), 500, False, swing_deg=throw.LOB_SWING, start_j=throw.LOB_START_J, yaw_deg=12))
     assert out["dry_run"] is True
+
+
+def test_far_swing_inside_limits_and_speed_table():
+    start = [0.0, throw.FAR_START_J[0], throw.FAR_START_J[1], 0.0, throw.FAR_START_J[2], 0.0]
+    end = list(start)
+    for j, d in throw.FAR_SWING.items():
+        end[j] += d
+    throw.check_limits(start, end)
+    assert abs(throw.far_speed_for(983) - 180) < 1e-6
+    assert 105 < throw.far_speed_for(850) < 120
+    assert throw.far_speed_for(5000) == 180.0
+    assert throw.far_speed_for(100) >= 100.0
+    # open command goes out before the arm starts braking (fingers lag ~0.3 s)
+    assert -0.3 < throw.far_release_delay(180) < 0.0
+
+
+def test_far_dry_run(monkeypatch):
+    for cls in (throw.MotionClient, throw.Arm, throw.Gripper):
+        monkeypatch.setattr(cls, "from_robot", staticmethod(lambda r, n: object()))
+    fp = throw.far_params(850)
+    out = asyncio.run(throw.throw(object(), 850, False, 1.0, True, fp["release_delay_s"], fp["swing_deg"],
+                                  fp["speed_dps"], fp["accel_dps2"], None, fp["start_j"], -9.1, fp["gripper_speed"]))
+    assert out["dry_run"] is True
