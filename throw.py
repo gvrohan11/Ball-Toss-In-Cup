@@ -149,8 +149,14 @@ def release_delay(speed_dps, preset="far", accel=ACCEL):
     return max(t_brake - p["lead"], p["min_delay"])
 
 
-def plan(distance_mm, preset="far", speed=None, release_delay_s=None, ratio=1.0, yaw_deg=0.0, scale=1.0):
-    """Everything for one throw, no robot needed. Raises on anything unsafe."""
+def plan(distance_mm, preset="far", speed=None, release_delay_s=None, ratio=1.0, yaw_deg=0.0, scale=1.0,
+         roll=None, tilt_up=0.0, cradle_open=None):
+    """Everything for one throw, no robot needed. Raises on anything unsafe.
+    roll: absolute wrist roll J6 (deg) for the swing (default: the preset's j6, or keep current).
+    tilt_up: raise the fingers this many deg for the whole swing (J5 +; checked live: +1 deg J5 = +1 deg).
+    cradle_open: cradle opening past the holding position (gripper units, default CRADLE_OPEN_DELTA)."""
+    if not -15 <= tilt_up <= 25:
+        raise ValueError("--tilt-up must be between -15 and 25 deg")
     if preset not in PRESETS:
         raise ValueError(f"unknown preset {preset!r} (use {', '.join(PRESETS)})")
     if not 0.1 <= scale <= 1.0:
@@ -169,7 +175,8 @@ def plan(distance_mm, preset="far", speed=None, release_delay_s=None, ratio=1.0,
     swing = {j: d * scale for j, d in p["swing"].items()}
     if p["start_j"] is None:
         raise ValueError(f"preset {preset!r} has no design yet")
-    start = [yaw_deg, p["start_j"][0], p["start_j"][1], 0.0, p["start_j"][2], p.get("j6") or 0.0]
+    j6 = roll if roll is not None else p.get("j6")
+    start = [yaw_deg, p["start_j"][0], p["start_j"][1], 0.0, p["start_j"][2] + tilt_up, j6 or 0.0]
     end = list(start)
     for j, d in swing.items():
         end[j] += d
@@ -178,7 +185,8 @@ def plan(distance_mm, preset="far", speed=None, release_delay_s=None, ratio=1.0,
     return dict(preset=preset, distance_mm=round(distance_mm), speed_dps=round(spd, 1), accel_dps2=ACCEL,
                 release_delay_s=round(delay, 3), swing_deg=swing, start_j=start, end_j=end,
                 yaw_deg=round(yaw_deg, 1), direct=p["direct"], ratio=round(ratio, 3), scale=scale,
-                release_mode="cradle" if cradle else "timed", j6=p.get("j6"),
+                release_mode="cradle" if cradle else "timed", j6=j6, tilt_up=tilt_up,
+                cradle_open=CRADLE_OPEN_DELTA if cradle_open is None else cradle_open,
                 model_landing_mm=round(model_landing(spd, preset) * ratio))
 
 
@@ -230,6 +238,7 @@ async def throw(robot, pl, go, release=True, direct=None, partial=False, check_o
     cur = list((await arm.get_joint_positions()).values)
     j6 = pl["j6"] if pl.get("j6") is not None else cur[5]
     start = [cur[0] + pl["yaw_deg"], pl["start_j"][1], pl["start_j"][2], cur[3], pl["start_j"][4], j6]
+    print(f"   wrist roll J6 {j6:+.0f} deg, fingers tilted {pl.get('tilt_up', 0):+.0f} deg")
     end = list(start)
     for j, d in pl["swing_deg"].items():
         end[j] += d
@@ -245,7 +254,7 @@ async def throw(robot, pl, go, release=True, direct=None, partial=False, check_o
         await arm.do_command({"set_speed": NORMAL_SPEED})
         await arm.move_to_joint_positions(JointPositions(values=start), extra=extra(NORMAL_SPEED, 300.0))
         held = await _gripper_pos(gripper)
-        cradle_pos = (held if held is not None else HOLD_POS_TYPICAL) + CRADLE_OPEN_DELTA
+        cradle_pos = (held if held is not None else HOLD_POS_TYPICAL) + pl.get("cradle_open", CRADLE_OPEN_DELTA)
         if check_only:
             if cradle:
                 print(f"   cradle: gripper {held} -> {cradle_pos:.0f}")
@@ -326,6 +335,11 @@ def add_args(ap):
     ap.add_argument("--cradle-check", action="store_true",
                     help="go to the cradle wind-up, open the cradle, hold 3 s, close, go home. NO swing")
     ap.add_argument("--partial", action="store_true", help="timed release opens partway, not fully")
+    ap.add_argument("--roll", type=float, default=None,
+                    help="wrist roll J6 (deg, absolute) during the throw; cradle default 90. Try 0 / 180 / -90")
+    ap.add_argument("--tilt-up", type=float, default=0.0, help="raise the fingers this many deg (J5) for the throw")
+    ap.add_argument("--cradle-open", type=float, default=None,
+                    help=f"cradle opening past the holding position, gripper units (default {CRADLE_OPEN_DELTA})")
     ap.add_argument("--speed", type=float, default=None, help="override the swing speed, deg/s (max 180)")
     ap.add_argument("--release-delay", type=float, default=None, help="override the open time, s from swing start")
     ap.add_argument("--scale", type=float, default=1.0, help="0.1-1: shrink swing + speed for a first look")
@@ -355,7 +369,8 @@ def plan_from_args(a, distance_mm, yaw_deg=None, ratio=None):
     preset = preset_from_args(a)
     ratio = learned_ratio(a) if ratio is None else ratio
     return plan(distance_mm, preset, a.speed, a.release_delay, ratio,
-                a.yaw if yaw_deg is None else yaw_deg, a.scale)
+                a.yaw if yaw_deg is None else yaw_deg, a.scale,
+                getattr(a, "roll", None), getattr(a, "tilt_up", 0.0) or 0.0, getattr(a, "cradle_open", None))
 
 
 async def _main():
