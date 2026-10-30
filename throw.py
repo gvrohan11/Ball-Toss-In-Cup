@@ -137,7 +137,7 @@ async def throw(robot, distance_mm, go, scale=1.0, release=True, release_delay_s
     for j, d in swing_deg.items():
         end[j] += d * scale
     check_limits(start, end)
-    speed = max(20, (speed_dps or THROW_SPEED) * scale)
+    speed = max(20, (speed_dps or (LOB_SPEED_DPS if start_j is not None else THROW_SPEED)) * scale)
     accel = max(100, (accel_dps2 or THROW_ACCEL) * scale)
     if speed > MAX_SPEED or accel > MAX_ACCEL:
         raise ValueError(f"speed/accel above the module limit ({MAX_SPEED} deg/s, {MAX_ACCEL} deg/s2)")
@@ -182,6 +182,11 @@ async def throw(robot, distance_mm, go, scale=1.0, release=True, release_delay_s
                   "swing_done_s": t_swing}
         print("   timing (s from swing start): " + ", ".join(
             f"{k.replace('_s', '')}={v:.2f}" for k, v in timing.items() if v is not None))
+    except Exception as e:
+        if "Linear speed exceeds limit" in str(e):
+            print("!! the arm's controller stopped the swing: the gripper was moving faster than its linear "
+                  "speed limit. Re-run with a lower --speed (about 10 deg/s less) or a smaller --scale.")
+        raise
     finally:
         await arm.do_command({"set_speed": NORMAL_SPEED})
         print("3) speed restored")
@@ -199,6 +204,12 @@ def swing_from_args(a):
             sw[j] = v
     return sw
 
+
+# xArm firmware limit seen live (Oct 29): "Linear speed exceeds limit in ServoJ mode" stopped the lob
+# mid-swing at ~2.8 m/s of gripper speed (J2 180 deg/s). Earlier swings peaked ~1.65 m/s and ran
+# fine. Gripper speed is about 2.79 m/s * (joint speed / 180), so keep the lob at --speed 120 or below
+# (~1.9 m/s) and go down in steps of 10 if it still trips.
+LOB_SPEED_DPS = 120
 
 # LOB: ball leaves almost straight UP at full speed. Measured Oct 29 at the middle of the swing
 # (gripper mm per degree, forward/up): J2+ (-2.2, +8.2), J3+ (-4.8, -7.3), J5+ (+3.4, 0).
