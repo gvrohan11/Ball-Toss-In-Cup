@@ -67,7 +67,8 @@ async def run(args):
         try:
             print("3) throw")
             await move_to(motion, HOME, go, "home")
-            info = await throw.throw(robot, args.distance, go, args.scale, not args.no_release)
+            info = await throw.throw(robot, args.distance, go, args.scale, not args.no_release,
+                                     args.release_delay)
         except BaseException as e:  # error or Ctrl+C: don't leave the ball in the gripper
             print(f"!! stopped ({type(e).__name__}: {e}); putting the ball back")
             await put_ball_back(robot, motion, ball, go)
@@ -92,6 +93,8 @@ def main():
     ap.add_argument("--distance", type=float, required=True, help="cup distance from base, mm")
     ap.add_argument("--scale", type=float, default=1.0)
     ap.add_argument("--no-release", action="store_true")
+    ap.add_argument("--release-delay", type=float, default=None,
+                    help="seconds after the swing starts to open the gripper; try 0.0 / 0.05 / 0.1")
     ap.add_argument("--go", action="store_true")
     ap.add_argument("--i-checked-with-staff", action="store_true")
     asyncio.run(run(ap.parse_args()))

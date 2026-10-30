@@ -22,6 +22,7 @@ release timing noisy; a module running on the robot computer would fix that.
 """
 import argparse
 import asyncio
+import time
 
 from viam.components.arm import Arm
 from viam.components.gripper import Gripper
@@ -44,7 +45,10 @@ JOINT_LIMITS_DEG = {0: (-360, 360), 1: (-132, 120), 2: (-242, 3.5), 3: (-360, 36
                     4: (-124, 124), 5: (-360, 360)}
 LIMIT_MARGIN_DEG = 5
 # release delay after the swing starts, per target distance (mm) - placeholders to tune
-RELEASE_TABLE = [(900, 0.16), (1100, 0.20), (1300, 0.24)]
+# First live throw (Oct 29, full speed): released at 200 ms and the ball just dropped when the arm
+# stopped - the open command + finger travel add ~0.2 s, so 200 ms landed at the END of the ~0.4 s
+# swing. Start much earlier and tune with --release-delay (try 0.0 / 0.05 / 0.1).
+RELEASE_TABLE = [(900, 0.03), (1100, 0.05), (1300, 0.08)]
 # theta=0 on purpose: with theta=180 the planner turned the wrist (J6) from ~0 to -180, a visible
 # half turn before every throw. Same position/tilt/joints J1-J5 (checked on the real arm Oct 29);
 # only the wrist angle differs, and the swing uses J3/J5 only.
@@ -86,14 +90,16 @@ async def _go_home(motion, tries=3):
     return False
 
 
-async def throw(robot, distance_mm, go, scale=1.0, release=True):
+async def throw(robot, distance_mm, go, scale=1.0, release=True, release_delay_s=None):
     """scale (0.1..1) shrinks the swing angles AND the speed: use 0.2-0.3 first, empty gripper,
     release=False, to watch the motion before any real throw."""
     if not 0.1 <= scale <= 1.0:
         raise ValueError("--scale must be between 0.1 and 1")
     motion = MotionClient.from_robot(robot, "builtin")
     arm, gripper = Arm.from_robot(robot, ARM), Gripper.from_robot(robot, GRIPPER)
-    delay = release_delay(distance_mm)
+    delay = release_delay(distance_mm) if release_delay_s is None else float(release_delay_s)
+    if not 0.0 <= delay <= 0.6:
+        raise ValueError("--release-delay must be between 0 and 0.6 s")
     print(f"1) wind up (planned move) to {WIND_UP}")
     if go:
         ok = await motion.move(GRIPPER, PoseInFrame(reference_frame="world", pose=Pose(**WIND_UP)))
@@ -112,17 +118,26 @@ async def throw(robot, distance_mm, go, scale=1.0, release=True):
         return {"distance_mm": distance_mm, "release_delay_s": delay, "dry_run": True}
     try:
         await arm.do_command({"set_speed": speed, "set_acceleration": accel})
+        t0 = time.monotonic()
         swing = asyncio.create_task(arm.move_to_joint_positions(JointPositions(values=end)))
+        t_open_call = t_open_done = None
         if release:
             await asyncio.sleep(delay)
+            t_open_call = time.monotonic() - t0
             await gripper.open()
+            t_open_done = time.monotonic() - t0
         await swing
+        t_swing = time.monotonic() - t0
+        timing = {"open_called_s": t_open_call, "open_returned_s": t_open_done, "swing_done_s": t_swing}
+        print("   timing (s from swing start): " + ", ".join(
+            f"{k.replace('_s', '')}={v:.2f}" for k, v in timing.items() if v is not None))
     finally:
         await arm.do_command({"set_speed": NORMAL_SPEED})
         print("3) speed restored")
     await _go_home(motion)
     return {"distance_mm": distance_mm, "release_delay_s": delay,
-            "throw_speed": speed, "swing_deg": SWING_DEG, "scale": scale, "released": release}
+            "throw_speed": speed, "swing_deg": SWING_DEG, "scale": scale, "released": release,
+            "timing": timing}
 
 
 async def _main():
@@ -131,6 +146,9 @@ async def _main():
     ap.add_argument("--scale", type=float, default=1.0,
                     help="0.1-1: shrink swing angles and speed (use 0.2-0.3 for the first live look)")
     ap.add_argument("--no-release", action="store_true", help="swing but never open the gripper")
+    ap.add_argument("--release-delay", type=float, default=None,
+                    help="seconds after the swing starts to open the gripper (default: table). "
+                         "Dropping straight down = too late; try 0.0, 0.05, 0.1")
     ap.add_argument("--go", action="store_true")
     ap.add_argument("--i-checked-with-staff", action="store_true")
     a = ap.parse_args()
@@ -139,7 +157,7 @@ async def _main():
         print("Refusing to throw live without --i-checked-with-staff (direct joint move, no obstacle checks).")
     robot = await connect()
     try:
-        print(await throw(robot, a.distance, go, a.scale, not a.no_release))
+        print(await throw(robot, a.distance, go, a.scale, not a.no_release, a.release_delay))
     finally:
         await robot.close()
 

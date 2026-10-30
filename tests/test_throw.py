@@ -43,9 +43,18 @@ def test_scale_validated_and_dry_run_moves_nothing(monkeypatch):
 
 
 def test_release_delay_interpolates():
-    assert throw.release_delay(1000) == pytest.approx(0.18)
-    assert throw.release_delay(500) == 0.16 and throw.release_delay(2000) == 0.24
+    assert throw.release_delay(1000) == pytest.approx(0.04)
+    assert throw.release_delay(500) == 0.03 and throw.release_delay(2000) == 0.08
 
 
 def test_wind_up_does_not_turn_the_wrist():
     assert throw.WIND_UP["theta"] == 0      # theta=180 spun J6 by 180 deg before every throw
+
+
+def test_release_delay_override_validated(monkeypatch):
+    for cls in (throw.MotionClient, throw.Arm, throw.Gripper):
+        monkeypatch.setattr(cls, "from_robot", staticmethod(lambda r, n: object()))
+    with pytest.raises(ValueError):
+        asyncio.run(throw.throw(object(), 1100, False, release_delay_s=1.5))
+    out = asyncio.run(throw.throw(object(), 1100, False, release_delay_s=0.0))
+    assert out["release_delay_s"] == 0.0
