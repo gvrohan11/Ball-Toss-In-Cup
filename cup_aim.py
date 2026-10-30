@@ -1,7 +1,7 @@
 """Manan: find the cup with the angled camera view and aim the drop at its center.
 
 This is the integration-side cup locator that produced 2/2 drops on Oct 29.
-Rohan's cups.py (get_cups) can replace it once it's reliable; keep the same output:
+Rohan's original cups.py interface was removed (Oct 29); keep the same output:
 (x, y, z) of the cup RIM CENTER in mm, world frame.
 
     python cup_aim.py        # read-only: uses the current camera view, moves nothing

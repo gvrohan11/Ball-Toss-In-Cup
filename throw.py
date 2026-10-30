@@ -1,27 +1,26 @@
-"""Phase 2 DRAFT: throw the held ball toward a far cup with a fast forward swing.
+"""Phase 2: throw the held ball at a cup. Two presets, both found by optimizing the swing on the
+xArm850 URDF and checked live on sfhack11 (Oct 29):
 
-NOT TESTED ON THE ROBOT. Talk to Viam staff before the first live throw:
-- the swing is a DIRECT joint move: it does NOT go through motion planning,
-  so table / wall / ceiling obstacles are NOT checked;
-- it raises the arm speed (restored afterwards, even on error).
+  far    open-hand forward toss, cups ~80-100 cm. THE DEFAULT. The ball rides in the palm with the
+         fingers pointing forward, and it flies off when the arm brakes, so finger timing matters little.
+         Live: the landing matched the model within ~8 cm (19:33-19:37) and hit the right distance at
+         955 mm / 165 deg/s six times in a row (20:10-20:16; missed by bouncing out, not distance).
+  power  full-force throw for distance (direct mode only), cups 1-2 m. Timed release: it scatters more.
 
-    python throw.py --distance 1300                 # dry run: prints the plan
-    python throw.py --distance 1300 --go --i-checked-with-staff   # live (E-stop!)
+    python throw.py --distance 900                                 # dry run: prints the plan
+    python throw.py --distance 900 --go --i-checked-with-staff     # live (E-stop!)
+    python throw.py --distance 1500 --power --go --i-checked-with-staff
 
-How it works:
- 1. (planned move) gripper to WIND_UP: above the table, tilted back, ball held.
- 2. read the joint angles there; the swing = rotate the elbow (J3) and wrist (J5)
-    forward by SWING_DEG, so the gripper sweeps forward and up.
- 3. start the joint move at THROW_SPEED; after RELEASE_DELAY_S, open the gripper.
- 4. restore the normal speed, go home.
+Safety: the swing and the wind-up are DIRECT joint moves (no Viam motion planning), so every one is
+checked first with throw_safety.path_problems (table / ceiling / walls, live obstacle values) and joint
+limits. Raised speeds are restored in a `finally`.
 
-Tuning: distance is controlled by RELEASE_DELAY_S (earlier = higher arc, later =
-flatter) and THROW_SPEED. Log every throw (main.py's logger) with the landing spot,
-then fit delay vs distance from Atlas. Network latency (15-400 ms seen today) makes
-release timing noisy; a module running on the robot computer would fix that.
+Distance: the swing speed comes from the preset's model table, scaled by the correction learned from
+logged throws in Atlas (throw_fit.py). --speed overrides it.
 """
 import argparse
 import asyncio
+import math
 import time
 
 from viam.components.arm import Arm
@@ -31,9 +30,9 @@ from viam.proto.component.arm import JointPositions
 from viam.services.motion import MotionClient
 
 from connection import connect
+from throw_safety import path_problems
 
-# Windows ticks its timers every ~15.6 ms by default, so asyncio.sleep(0.10) could really be up to
-# 0.116 s - up to 16 ms of random release error. Ask for 1 ms timer resolution (no-op elsewhere).
+# Windows ticks its timers every ~15.6 ms by default; ask for 1 ms resolution (no-op elsewhere).
 try:
     import sys as _sys
     if _sys.platform == "win32":
@@ -44,30 +43,32 @@ except Exception:  # noqa: BLE001
 
 ARM, GRIPPER = "arm", "gripper"
 NORMAL_SPEED = 60            # deg/s, the config value
-THROW_SPEED = 150            # deg/s default; module max is 180 (use --speed 180)
-THROW_ACCEL = 900            # deg/s^2 default; module max is 1145 (use --accel 1100)
-MAX_SPEED, MAX_ACCEL = 180, 1145
-# joint index -> forward swing (J3 elbow, J5 wrist), degrees. Directions MEASURED on the real arm
-# at WIND_UP (Oct 29): J3 negative lifts the gripper up and forward (-15 deg: +94 mm x, +198 mm z);
-# J5 NEGATIVE tilts the gripper BACKWARD (-15 deg: tilt -0.5 -> -0.71), so a forward flick is J5 positive.
-SWING_DEG = {2: -35, 4: +45}
+MAX_SPEED, MAX_ACCEL = 180, 1145   # viam:ufactory module limits
 # xArm850 joint limits, degrees (UFactory spec). A swing that leaves them is refused, not clipped.
 JOINT_LIMITS_DEG = {0: (-360, 360), 1: (-132, 120), 2: (-242, 3.5), 3: (-360, 360),
                     4: (-124, 124), 5: (-360, 360)}
 LIMIT_MARGIN_DEG = 5
-# release delay after the swing starts, per target distance (mm) - placeholders to tune
-# First live throw (Oct 29, full speed): released at 200 ms and the ball just dropped when the arm
-# stopped - the open command + finger travel add ~0.2 s, so 200 ms landed at the END of the ~0.4 s
-# swing. Start much earlier and tune with --release-delay (try 0.0 / 0.05 / 0.1).
-# Measured Oct 29 (gripper_timing_test): open() takes ~0.3 s to start and ~0.4 s until the ball is
-# free, and the full swing lasts ~0.4 s. So the open command must go out BEFORE the swing:
-# negative delay = seconds before the swing starts. Ball lets go ~ (0.4 + delay) s into the swing.
-RELEASE_TABLE = [(900, -0.25), (1100, -0.20), (1300, -0.15)]
-# theta=0 on purpose: with theta=180 the planner turned the wrist (J6) from ~0 to -180, a visible
-# half turn before every throw. Same position/tilt/joints J1-J5 (checked on the real arm Oct 29);
-# only the wrist angle differs, and the swing uses J3/J5 only.
-WIND_UP = dict(x=300, y=0, z=450, o_x=-0.5, o_y=0, o_z=-0.866, theta=0)
 HOME = dict(x=350, y=0, z=445, o_x=0, o_y=0, o_z=-1, theta=180)
+GRIPPER_SPEED = 5000          # firmware max; faster fingers = earlier, steadier release
+MAX_YAW_DEG = 45
+
+# FAR: start ball (357, 0, 608) fingers forward -> end (622, 0, 799) fingers 22 deg up.
+# Flange stays ~1.14 m/s at 180 deg/s, under the ServoJ linear-speed stop (~1.26-1.44 m/s).
+FAR = dict(start_j=(55.9, -19.6, 11.1),            # J2, J3, J5
+           swing={1: -49.9, 2: -40.0, 4: +35.4},
+           table=[(105, 837), (120, 866), (135, 895), (150, 924), (165, 953), (180, 983)],  # deg/s -> mm
+           lead=0.43,          # gripper starts moving ~0.3 s after open(); open ~0.13 s before braking
+           min_speed=100.0, direct=False,
+           min_delay=0.10)     # live 19:34: opening before the swing dropped the ball (fingers forward)
+# POWER: shoulder, elbow, wrist all at 180 deg/s -> ball 3.8 m/s at 48 deg. Flange 3.26 m/s, so
+# only in direct mode (no ServoJ stop). Start ball (286, 0, 89) fingers back/down; release ~(600, 0, 300).
+POWER = dict(start_j=(-57.4, -65.5, -79.5),
+             swing={1: +33.1, 2: -34.7, 4: +34.3},
+             table=[(60, 900), (80, 1017), (100, 1187), (120, 1412), (140, 1679), (160, 1955), (180, 2179)],
+             lead=0.40, min_speed=50.0, direct=True,
+             min_delay=0.0)    # fingers point back/down at the start: never open before the swing
+PRESETS = {"far": FAR, "power": POWER}
+ACCEL = 1145
 
 
 def check_limits(start, end):
@@ -79,19 +80,90 @@ def check_limits(start, end):
                              f"(allowed {lo + LIMIT_MARGIN_DEG}..{hi - LIMIT_MARGIN_DEG})")
 
 
-def release_delay(distance_mm):
-    pts = sorted(RELEASE_TABLE)
-    if distance_mm <= pts[0][0]:
-        return pts[0][1]
-    for (d0, t0), (d1, t1) in zip(pts, pts[1:]):
+def check_path(q_from, q_to, what):
+    """Raise if the direct joint move q_from -> q_to passes too close to the table/ceiling/walls."""
+    probs = path_problems(q_from, q_to)
+    if probs:
+        raise RuntimeError(f"{what} path not clear: " + "; ".join(probs))
+
+
+def yaw_for_cup(x, y):
+    """Base rotation (deg) that points the throw plane at a cup at world (x, y) mm."""
+    yaw = math.degrees(math.atan2(y, x))
+    print(f"   aim: cup at ({x:.0f}, {y:.0f}) -> yaw {yaw:+.1f} deg, {math.hypot(x, y):.0f} mm from the base")
+    return yaw
+
+
+def reach_mm(preset, ratio=1.0):
+    """(min, max) cup distance a preset can reach, mm."""
+    t = PRESETS[preset]["table"]
+    return round(t[0][1] * ratio) - 60, round(t[-1][1] * ratio) + 40
+
+
+def speed_for(distance_mm, preset="far", ratio=1.0):
+    """Swing speed (deg/s) whose landing is distance_mm from the base. `ratio` = observed / model
+    landing distance from logged throws (throw_fit). Clamped to [min_speed, 180]."""
+    p = PRESETS[preset]
+    t = [(s, d * ratio) for s, d in p["table"]]
+    if distance_mm <= t[0][1]:
+        slope = (t[1][1] - t[0][1]) / (t[1][0] - t[0][0])
+        return max(p["min_speed"], t[0][0] - (t[0][1] - distance_mm) / slope)
+    for (s0, d0), (s1, d1) in zip(t, t[1:]):
         if distance_mm <= d1:
-            return t0 + (t1 - t0) * (distance_mm - d0) / (d1 - d0)
-    return pts[-1][1]
+            return s0 + (s1 - s0) * (distance_mm - d0) / (d1 - d0)
+    return float(MAX_SPEED)
+
+
+def model_landing(speed_dps, preset="far"):
+    """Model landing distance (mm) for a swing speed: the inverse of speed_for at ratio 1."""
+    t = PRESETS[preset]["table"]
+    if speed_dps <= t[0][0]:
+        (s0, d0), (s1, d1) = t[0], t[1]
+    else:
+        (s0, d0), (s1, d1) = next(((a, b) for a, b in zip(t, t[1:]) if speed_dps <= b[0]), (t[-2], t[-1]))
+    return d0 + (d1 - d0) * (speed_dps - s0) / (s1 - s0)
+
+
+def release_delay(speed_dps, preset="far", accel=ACCEL):
+    """Open-command time (s from swing start) so the fingers are open as the arm starts braking."""
+    p = PRESETS[preset]
+    dmax = max(abs(v) for v in p["swing"].values())
+    t_brake = speed_dps / accel + (dmax - speed_dps ** 2 / accel) / speed_dps
+    return max(t_brake - p["lead"], p["min_delay"])
+
+
+def plan(distance_mm, preset="far", speed=None, release_delay_s=None, ratio=1.0, yaw_deg=0.0, scale=1.0):
+    """Everything for one throw, no robot needed. Raises on anything unsafe."""
+    if preset not in PRESETS:
+        raise ValueError(f"unknown preset {preset!r} (use {', '.join(PRESETS)})")
+    if not 0.1 <= scale <= 1.0:
+        raise ValueError("--scale must be between 0.1 and 1")
+    if abs(yaw_deg) > MAX_YAW_DEG:
+        raise ValueError(f"yaw must be within +-{MAX_YAW_DEG} deg (move the cup nearer the middle)")
+    p = PRESETS[preset]
+    spd = speed if speed is not None else speed_for(distance_mm, preset, ratio)
+    spd = max(20.0, spd * scale)
+    if spd > MAX_SPEED:
+        raise ValueError(f"speed above the module limit ({MAX_SPEED} deg/s)")
+    delay = release_delay(spd, preset) if release_delay_s is None else float(release_delay_s)
+    if not -0.6 <= delay <= 0.6:
+        raise ValueError("--release-delay must be between -0.6 and 0.6 s")
+    swing = {j: d * scale for j, d in p["swing"].items()}
+    start = [yaw_deg, p["start_j"][0], p["start_j"][1], 0.0, p["start_j"][2], 0.0]
+    end = list(start)
+    for j, d in swing.items():
+        end[j] += d
+    check_limits(start, end)
+    check_path(start, end, "swing")
+    return dict(preset=preset, distance_mm=round(distance_mm), speed_dps=round(spd, 1), accel_dps2=ACCEL,
+                release_delay_s=round(delay, 3), swing_deg=swing, start_j=start, end_j=end,
+                yaw_deg=round(yaw_deg, 1), direct=p["direct"], ratio=round(ratio, 3), scale=scale,
+                model_landing_mm=round(model_landing(spd, preset) * ratio))
 
 
 async def _go_home(motion, tries=3):
-    """The move home right after a fast swing was cancelled once by the robot's session manager
-    (Oct 29, "context canceled"); the swing itself had finished. Moving home is safe to repeat."""
+    """The move home right after a fast swing was cancelled once by the session manager (Oct 29,
+    "context canceled"). Moving home is safe to repeat."""
     for i in range(tries):
         try:
             ok = await motion.move(GRIPPER, PoseInFrame(reference_frame="world", pose=Pose(**HOME)))
@@ -100,314 +172,136 @@ async def _go_home(motion, tries=3):
         except Exception as e:  # noqa: BLE001
             print(f"  home move failed ({type(e).__name__}: {str(e)[:80]}), try {i + 1}/{tries}")
         await asyncio.sleep(1.0)
-    print("!! arm is NOT home: run `python main.py` (dry run does not move it) or move it by hand/Viam app")
+    print("!! arm is NOT home: run `python home.py` or move it in the Viam app")
     return False
 
 
-async def throw(robot, distance_mm, go, scale=1.0, release=True, release_delay_s=None,
-                swing_deg=None, speed_dps=None, accel_dps2=None, wind_z=None, start_j=None, yaw_deg=0.0,
-                gripper_speed=None, direct=False):
-    """scale (0.1..1) shrinks the swing angles AND the speed: use 0.2-0.3 first, empty gripper,
-    release=False, to watch the motion before any real throw."""
-    if not 0.1 <= scale <= 1.0:
-        raise ValueError("--scale must be between 0.1 and 1")
+async def throw(robot, pl, go, release=True, direct=None):
+    """Run a plan from plan(). Starts from home; wind-up and swing are checked direct joint moves."""
+    direct = pl["direct"] if direct is None else direct
+    print(f"1) wind up (joint move) to J2={pl['start_j'][1]} J3={pl['start_j'][2]} J5={pl['start_j'][4]}, "
+          f"yaw {pl['yaw_deg']:+.1f} deg")
+    print(f"2) {pl['preset'].upper()} swing at {pl['speed_dps']:.0f} deg/s"
+          + (f", open at {pl['release_delay_s'] * 1000:+.0f} ms" if release else ", NO release")
+          + f" (cup {pl['distance_mm']} mm, model lands {pl['model_landing_mm']} mm, "
+            f"{'direct' if direct else 'servo'} mode, scale {pl['scale']})")
+    if not go:
+        return {**pl, "dry_run": True}
     motion = MotionClient.from_robot(robot, "builtin")
     arm, gripper = Arm.from_robot(robot, ARM), Gripper.from_robot(robot, GRIPPER)
-    delay = release_delay(distance_mm) if release_delay_s is None else float(release_delay_s)
-    if not -0.6 <= delay <= 0.6:
-        raise ValueError("--release-delay must be between -0.6 and 0.6 s")
-    if yaw_deg and start_j is None:
-        raise ValueError("--yaw / --cup only work with --lob (direct joint swing)")
-    if abs(yaw_deg) > 45:
-        raise ValueError("yaw must be within +-45 deg (cup at the side: move the cup nearer the middle)")
-    wind = dict(WIND_UP)
-    if wind_z is not None:
-        if not 300 <= wind_z <= 800:
-            raise ValueError("--wind-z must be between 300 and 800 mm")
-        wind["z"] = wind_z
-    if start_j is not None:
-        # Direct joint move to a known start configuration (J2, J3, J5; the other joints stay as
-        # they are). Used by the lob, whose swing is designed around exact joint angles.
-        print(f"1) wind up (joint move): J2={start_j[0]} J3={start_j[1]} J5={start_j[2]}, yaw {yaw_deg:+.1f} deg")
-        if go:
-            pose = await arm.get_end_position()
-            if abs(pose.x - HOME["x"]) > 90 or abs(pose.y - HOME["y"]) > 90 or pose.z < 350:
-                raise RuntimeError(f"Start from home first (arm at {pose.x:.0f}, {pose.y:.0f}, {pose.z:.0f}): "
-                                   "this wind-up is a direct joint move. Run `python home.py`.")
-            cur = list((await arm.get_joint_positions()).values)
-            # J1 turns the whole swing plane about the base: +yaw = toward +y (checked live: J1 +4.3 deg -> y +25 at x 339)
-            target = [cur[0] + yaw_deg, start_j[0], start_j[1], cur[3], start_j[2], cur[5]]
-            check_limits(cur, target)
-            await arm.do_command({"set_speed": NORMAL_SPEED})
-            await arm.move_to_joint_positions(
-                JointPositions(values=target),
-                extra={"direct": True, "speed_d": NORMAL_SPEED, "acceleration_d": 300.0} if direct else None)
-    else:
-        print(f"1) wind up (planned move) to {wind}")
-        if go:
-            ok = await motion.move(GRIPPER, PoseInFrame(reference_frame="world", pose=Pose(**wind)))
-            if ok is False:
-                raise RuntimeError("wind-up move failed")
-    start = list((await arm.get_joint_positions()).values) if go else (
-        [yaw_deg, start_j[0], start_j[1], 0.0, start_j[2], 0.0] if start_j else [0.0] * 6)
+    pose = await arm.get_end_position()
+    if abs(pose.x - HOME["x"]) > 90 or abs(pose.y - HOME["y"]) > 90 or pose.z < 350:
+        raise RuntimeError(f"Start from home first (arm at {pose.x:.0f}, {pose.y:.0f}, {pose.z:.0f}). "
+                           "Run `python home.py`.")
+    cur = list((await arm.get_joint_positions()).values)
+    start = [cur[0] + pl["yaw_deg"], pl["start_j"][1], pl["start_j"][2], cur[3], pl["start_j"][4], cur[5]]
     end = list(start)
-    swing_deg = dict(SWING_DEG if swing_deg is None else swing_deg)
-    for j, d in swing_deg.items():
-        end[j] += d * scale
+    for j, d in pl["swing_deg"].items():
+        end[j] += d
+    check_limits(cur, start)
     check_limits(start, end)
-    speed = max(20, (speed_dps or (LOB_SPEED_DPS if start_j is not None else THROW_SPEED)) * scale)
-    accel = max(100, (accel_dps2 or THROW_ACCEL) * scale)
-    if speed > MAX_SPEED or accel > MAX_ACCEL:
-        raise ValueError(f"speed/accel above the module limit ({MAX_SPEED} deg/s, {MAX_ACCEL} deg/s2)")
-    print(f"2) swing joints {[round(v, 1) for v in start]} -> {[round(v, 1) for v in end]} "
-          f"at {speed:.0f} deg/s, " + (f"release after {delay * 1000:.0f} ms" if release else "NO release")
-          + f" (target {distance_mm} mm, scale {scale})")
-    if not go:
-        return {"distance_mm": distance_mm, "release_delay_s": delay, "dry_run": True}
+    check_path(cur, start, "wind-up")
+    check_path(start, end, "swing")
+    extra = (lambda s, a: {"direct": True, "speed_d": float(s), "acceleration_d": float(a)}) if direct else (
+        lambda s, a: None)
+    prev_gs = None
+    timing = {}
     try:
-        if gripper_speed and release:
-            # firmware default is 1500 (G1) / 2000 (G2); max 5000. Faster fingers = earlier, steadier release.
+        await arm.do_command({"set_speed": NORMAL_SPEED})
+        await arm.move_to_joint_positions(JointPositions(values=start), extra=extra(NORMAL_SPEED, 300.0))
+        if release:
             try:
                 prev_gs = (await gripper.do_command({"get_gripper_speed": True})).get("gripper_speed")
             except Exception:  # noqa: BLE001
                 prev_gs = None
-            await gripper.do_command({"set_gripper_speed": gripper_speed})
-        await arm.do_command({"set_speed": speed, "set_acceleration": accel})
-        # direct=True: the module sends ONE point-to-point command (xArm motion mode 0, planned by UFactory's
-        # firmware) instead of streaming 100 servo setpoints/s (mode 1). The "Linear speed exceeds limit in
-        # ServoJ mode" stop belongs to mode 1, and with no stream on the bus the gripper commands don't queue.
-        swing_extra = {"direct": True, "speed_d": float(speed), "acceleration_d": float(accel)} if direct else None
-        t0 = time.monotonic()
-        t_open_call = t_open_done = None
+            await gripper.do_command({"set_gripper_speed": GRIPPER_SPEED})
+        await arm.do_command({"set_speed": pl["speed_dps"], "set_acceleration": pl["accel_dps2"]})
+        stamps = {}           # absolute monotonic times
         open_task = None
 
         async def open_gripper():
-            nonlocal t_open_call, t_open_done
-            t_open_call = time.monotonic() - t0
+            stamps["open_called"] = time.monotonic()
             await gripper.open()
-            t_open_done = time.monotonic() - t0
+            stamps["open_returned"] = time.monotonic()
 
-        if release and delay < 0:
-            # The gripper reacts ~0.3-0.4 s after the command (measured Oct 29), so to let go
-            # mid-swing the open command goes out BEFORE the swing starts.
+        def start_swing():
+            stamps["swing_start"] = time.monotonic()
+            return asyncio.create_task(arm.move_to_joint_positions(
+                JointPositions(values=end), extra=extra(pl["speed_dps"], pl["accel_dps2"])))
+
+        delay = pl["release_delay_s"]
+        if release and delay < 0:   # override only: open command goes out BEFORE the swing
             open_task = asyncio.create_task(open_gripper())
             await asyncio.sleep(-delay)
-            t0_swing = time.monotonic()
-            swing = asyncio.create_task(arm.move_to_joint_positions(JointPositions(values=end), extra=swing_extra))
+            swing = start_swing()
         else:
-            t0_swing = time.monotonic()
-            swing = asyncio.create_task(arm.move_to_joint_positions(JointPositions(values=end), extra=swing_extra))
+            swing = start_swing()
             if release:
                 await asyncio.sleep(delay)
                 open_task = asyncio.create_task(open_gripper())
         await swing
-        t_swing = time.monotonic() - t0_swing
+        stamps["swing_done"] = time.monotonic()
         if open_task is not None:
             await open_task
-        # times relative to the START OF THE SWING (negative = before it)
-        shift = t0_swing - t0
-        timing = {"open_called_s": None if t_open_call is None else t_open_call - shift,
-                  "open_returned_s": None if t_open_done is None else t_open_done - shift,
-                  "swing_done_s": t_swing}
+        t0 = stamps["swing_start"]
+        timing = {f"{k}_s": round(v - t0, 3) for k, v in stamps.items() if k != "swing_start"}
         print("   timing (s from swing start): " + ", ".join(
             f"{k.replace('_s', '')}={v:.2f}" for k, v in timing.items() if v is not None))
     except Exception as e:
         if "Linear speed exceeds limit" in str(e):
-            print("!! the arm's controller stopped the swing: the gripper was moving faster than its linear "
-                  "speed limit. Re-run with a lower --speed (about 10 deg/s less) or a smaller --scale.")
+            print("!! the controller stopped the swing (ServoJ linear speed limit). Use --direct, "
+                  "a lower --speed, or a smaller --scale.")
         raise
     finally:
         await arm.do_command({"set_speed": NORMAL_SPEED})
-        if gripper_speed and release and prev_gs:
+        if release and prev_gs:
             try:
                 await gripper.do_command({"set_gripper_speed": prev_gs})
             except Exception:  # noqa: BLE001
                 pass
         print("3) speed restored")
     await _go_home(motion)
-    return {"distance_mm": distance_mm, "release_delay_s": delay,
-            "throw_speed": speed, "throw_accel": accel, "swing_deg": swing_deg, "scale": scale, "released": release,
-            "timing": timing}
+    return {**pl, "direct": direct, "released": release, "timing": timing}
 
 
-LOB_RELEASE_RADIUS_MM = 480   # about where the lob lets go, measured from the base (landed on the cup's distance)
+def add_args(ap):
+    """Throw options shared by throw.py and pick_and_throw.py."""
+    ap.add_argument("--distance", type=float, default=None, help="cup distance from the base, mm")
+    ap.add_argument("--power", action="store_true", help="full-force preset for 1-2 m (direct mode)")
+    ap.add_argument("--speed", type=float, default=None, help="override the swing speed, deg/s (max 180)")
+    ap.add_argument("--release-delay", type=float, default=None, help="override the open time, s from swing start")
+    ap.add_argument("--scale", type=float, default=1.0, help="0.1-1: shrink swing + speed for a first look")
+    ap.add_argument("--yaw", type=float, default=0.0, help="turn the throw toward +y by this many deg")
+    ap.add_argument("--no-release", action="store_true", help="swing but never open the gripper")
+    ap.add_argument("--direct", action="store_true", help="point-to-point mode for FAR too (POWER always is)")
+    ap.add_argument("--no-learn", action="store_true", help="ignore the Atlas correction; use the raw model")
+    ap.add_argument("--go", action="store_true")
+    ap.add_argument("--i-checked-with-staff", action="store_true")
 
 
-def yaw_for_cup(x, y, warn=True):
-    """Base rotation (deg) that points the lob plane at a cup at world (x, y) mm; also warns on distance."""
-    import math
-    yaw = math.degrees(math.atan2(y, x))
-    r = math.hypot(x, y)
-    print(f"   aim: cup at ({x:.0f}, {y:.0f}) -> yaw {yaw:+.1f} deg, {r:.0f} mm from the base")
-    if warn and abs(r - LOB_RELEASE_RADIUS_MM) > 80:
-        print("!! cup is more than 8 cm from where the lob lands: move the cup to ~48 cm from the base")
-    return yaw
-
-
-# FAR: open-hand toss, found by optimizing the swing on the xArm850 URDF (Oct 29, 19:00).
-# Key facts it is built on:
-#  * The controller's "Linear speed exceeds limit in ServoJ mode" (error 0x3C) limits the FLANGE speed,
-#    not the ball: lob OK at 1.26 m/s flange, tripped at 1.44; a wrist-heavy throw ran with the gripper
-#    at 1.6 m/s and the flange at 1.2. This swing keeps the flange at 1.14 m/s at 180 deg/s.
-#  * A ball can only leave through the OPEN END of the fingers. Earlier throws had the fingers pointing
-#    down/back, so the ball just dropped. Here the fingers point forward (start) and 22 deg up (end);
-#    once the fingers open, gravity + the swing press the ball into the palm, and it flies off when the
-#    arm brakes - so the exact gripper timing matters much less.
-#  * Start: ball at (357, 0, 608) mm, fingers forward. End: (622, 0, 799), fingers 22 deg up.
-#    Release (start of braking) ~(540, 0, 772), 26 deg up. Model landing at cup-rim height (z 100):
-FAR_START_J = (55.9, -19.6, 11.1)          # J2, J3, J5
-FAR_SWING = {1: -49.9, 2: -40.0, 4: +35.4}
-FAR_ACCEL = 1145
-FAR_GRIPPER_SPEED = 5000
-FAR_TABLE = [(105, 837), (120, 866), (135, 895), (150, 924), (165, 953), (180, 983)]  # deg/s -> mm from base
-FAR_OPEN_LEAD_S = 0.43    # gripper starts moving ~0.3 s after open(); have it open ~0.13 s before braking
-
-
-# WHIP: wrist-whip throw, ~2x the FAR ball speed (1.9 m/s at 180 deg/s), launched ~42-53 deg up.
-# Same optimizer, but the ball is HELD until the fingers open (timed release), so the wrist can
-# add speed the flange limit doesn't see. Start: ball (367, 0, 561), fingers down. End: (671, 0, 795).
-# Release (start of braking) ~(577, 0, 683). Flange 1.12 m/s at 180 deg/s (limit ~1.26-1.44).
-# Model landing x1.05: live 116 deg/s landed ~1040 mm vs 989 modeled (15 cm past a cup at 892).
-WHIP_START_J = (3.6, -75.5, -91.1)
-WHIP_SWING = {1: -16.2, 2: -38.1, 4: +37.9}
-WHIP_TABLE = [(s, round(d * 1.05)) for s, d in
-              [(90, 897), (100, 931), (110, 966), (120, 1004), (135, 1065), (150, 1129), (165, 1197), (180, 1266)]]
-WHIP_OPEN_LEAD_S = 0.40   # ball should be free right as the arm starts braking (fastest point)
-
-# PITCH: underhand pitch with a real backswing (optimized Oct 29 19:30): 109 deg of wrist at full speed.
-# Start: ball (255, 0, 263), fingers pointing back/up. The wrist sweeps the ball down and under (lowest
-# ~19 cm above the base plane), releases ~(598, 0, 367) going 1.54 m/s, 63 deg up at 180 deg/s; lands
-# steep (75 deg). Flange only 0.94 m/s. Table = model x1.05 (the WHIP landed ~5% past its model).
-PITCH_START_J = (-57.7, -59.9, -116.9)
-PITCH_SWING = {1: +58.8, 2: +2.8, 4: +109.1}
-PITCH_TABLE = [(s, round(d * 1.05)) for s, d in [(120, 750), (135, 778), (150, 810), (165, 845), (180, 883)]]
-
-# POWER: full-force throw for DIRECT mode only (Oct 29 20:30). Optimized with the flange cap removed:
-# shoulder, elbow and wrist all at 180 deg/s -> ball 3.8 m/s at 48 deg, flange 3.26 m/s (the lob at
-# 180 ran clean in direct mode with the flange at 3.24). Start: ball (286, 0, 89), fingers back/down;
-# release ~(600, 0, 300). Ball >= 9 cm above the table-plane model, >= 29 cm from the base axis.
-POWER_START_J = (-57.4, -65.5, -79.5)
-POWER_SWING = {1: +33.1, 2: -34.7, 4: +34.3}
-POWER_TABLE = [(60, 900), (80, 1017), (100, 1187), (120, 1412), (140, 1679), (160, 1955), (180, 2179)]
-
-PRESETS = {
-    "far": dict(start_j=FAR_START_J, swing=FAR_SWING, table=FAR_TABLE, lead=FAR_OPEN_LEAD_S, min_speed=100.0),
-    "pitch": dict(start_j=PITCH_START_J, swing=PITCH_SWING, table=PITCH_TABLE, lead=WHIP_OPEN_LEAD_S,
-                  min_speed=120.0),
-    "power": dict(start_j=POWER_START_J, swing=POWER_SWING, table=POWER_TABLE, lead=WHIP_OPEN_LEAD_S,
-                  min_speed=50.0, direct=True),
-    "whip": dict(start_j=WHIP_START_J, swing=WHIP_SWING, table=WHIP_TABLE, lead=WHIP_OPEN_LEAD_S, min_speed=90.0),
-}
-
-
-def far_speed_for(distance_mm, preset="far"):
-    """Swing speed (deg/s) whose landing is distance_mm from the base (clamped to min-180)."""
-    t = PRESETS[preset]["table"]
-    lo = PRESETS[preset]["min_speed"]
-    if distance_mm <= t[0][1]:
-        return max(lo, t[0][0] - (t[0][1] - distance_mm) / ((t[1][1] - t[0][1]) / (t[1][0] - t[0][0])))
-    for (s0, d0), (s1, d1) in zip(t, t[1:]):
-        if distance_mm <= d1:
-            return s0 + (s1 - s0) * (distance_mm - d0) / (d1 - d0)
-    return 180.0
-
-
-def far_release_delay(speed_dps, accel=FAR_ACCEL, preset="far"):
-    """Open-command time (s from swing start, negative = before) for the arm's braking point."""
-    dmax = max(abs(v) for v in PRESETS[preset]["swing"].values())
-    t_brake = speed_dps / accel + (dmax - speed_dps ** 2 / accel) / speed_dps
-    return t_brake - PRESETS[preset]["lead"]
-
-
-def far_params(distance_mm, speed=None, accel=None, release_delay_s=None, preset="far"):
-    p = PRESETS[preset]
-    speed = speed or far_speed_for(distance_mm, preset)
-    accel = accel or FAR_ACCEL
-    delay = far_release_delay(speed, accel, preset) if release_delay_s is None else release_delay_s
-    if preset == "power" and release_delay_s is None:
-        delay = max(delay, 0.0)   # fingers point back/down at the start: never open before the swing
-    if preset == "far" and release_delay_s is None:
-        # live (Oct 29 19:34): opening before the swing dropped the ball - at the FAR start the fingers point
-        # forward, so the ball only stays in once the swing is pushing it into the palm.
-        delay = max(delay, 0.10)
-    print(f"   {preset.upper()}: cup {distance_mm:.0f} mm -> {speed:.0f} deg/s, open at {delay:+.2f} s, "
-          f"gripper speed {FAR_GRIPPER_SPEED}")
-    return dict(speed_dps=speed, accel_dps2=accel, release_delay_s=delay, swing_deg=dict(p["swing"]),
-                start_j=p["start_j"], gripper_speed=FAR_GRIPPER_SPEED, direct=p.get("direct", False))
-
-
-def swing_from_args(a):
-    """SWING_DEG with any --j2/--j3/--j5 overrides (joint index = J number - 1)."""
-    sw = dict(LOB_SWING if getattr(a, "lob", False) else SWING_DEG)
-    for j, v in ((1, a.j2), (2, a.j3), (4, a.j5)):
-        if v is not None:
-            sw[j] = v
-    return sw
-
-
-# xArm firmware limit seen live (Oct 29): "Linear speed exceeds limit in ServoJ mode" stopped the lob
-# mid-swing at ~2.8 m/s of gripper speed (J2 180 deg/s). Earlier swings peaked ~1.65 m/s and ran
-# fine. MEASURED with scripts/lob_speed_sweep.py (Oct 29, 18:36): lob swing OK at 50/60/70 deg/s,
-# tripped at 80. So the controller caps the lob at roughly 1.1 m/s of gripper speed (my Jacobian
-# estimate: 2.79 m/s * speed/180). 65 keeps a margin under the last good 70.
-LOB_SPEED_DPS = 65
-
-# LOB: ball leaves almost straight UP at full speed. Measured Oct 29 at the middle of the swing
-# (gripper mm per degree, forward/up): J2+ (-2.2, +8.2), J3+ (-4.8, -7.3), J5+ (+3.4, 0).
-# J2 +180, J3 -180, J5 -111 deg/s -> ~2.8 m/s up, ~0.1 m/s forward. The path is a vertical lift
-# (gripper 20 -> 80 cm above the table at x~370-480), released mid-swing; lands ~0.5 m from the base.
-LOB_START_J = (-25.0, -45.9, -48.3)            # J2, J3, J5 at the start of the swing
-LOB_SWING = {1: +40.0, 2: -40.0, 4: -25.0}      # end: J2 +15, J3 -85.9, J5 -73.3 (all within limits)
+def plan_from_args(a, distance_mm, yaw_deg=None):
+    preset = "power" if a.power else "far"
+    ratio = 1.0
+    if not a.no_learn and a.speed is None:
+        import throw_fit
+        ratio = throw_fit.correction(preset)
+    return plan(distance_mm, preset, a.speed, a.release_delay, ratio,
+                a.yaw if yaw_deg is None else yaw_deg, a.scale)
 
 
 async def _main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--distance", type=float, required=True, help="cup distance from base, mm")
-    ap.add_argument("--scale", type=float, default=1.0,
-                    help="0.1-1: shrink swing angles and speed (use 0.2-0.3 for the first live look)")
-    ap.add_argument("--no-release", action="store_true", help="swing but never open the gripper")
-    ap.add_argument("--release-delay", type=float, default=None,
-                    help="seconds after the swing starts to send the open command (default: table). "
-                         "NEGATIVE = open first: the gripper takes ~0.4 s to let go, so try -0.3 / -0.2 / -0.1")
-    ap.add_argument("--speed", type=float, default=None, help="swing speed deg/s (default 150, max 180)")
-    ap.add_argument("--accel", type=float, default=None, help="swing accel deg/s2 (default 900, max 1145)")
-    ap.add_argument("--j2", type=float, default=None,
-                    help="shoulder swing deg. MEASURED: negative = gripper forward+down, positive = back+up")
-    ap.add_argument("--j3", type=float, default=None, help="elbow swing deg (default -35: up and forward)")
-    ap.add_argument("--j5", type=float, default=None, help="wrist swing deg (default +45: tips forward)")
-    ap.add_argument("--wind-z", type=float, default=None,
-                    help="wind-up height mm (default 450). Higher start = longer swing path = a higher lob (try 650)")
-    ap.add_argument("--far", action="store_true",
-                    help="open-hand forward toss for a cup 84-98 cm from the base (speed picked from --distance)")
-    ap.add_argument("--pitch", action="store_true",
-                    help="underhand pitch: long 109-deg backswing at full speed, steep 63-deg launch (cup ~79-93 cm)")
-    ap.add_argument("--whip", action="store_true",
-                    help="wrist-whip throw, ~2x faster, 42-53 deg up (cup ~85-115 cm; speed from --distance)")
-    ap.add_argument("--power", action="store_true",
-                    help="full-force throw (direct mode): 3.8 m/s at 180 deg/s; speed picked from --distance")
-    ap.add_argument("--direct", action="store_true",
-                    help="point-to-point mode (UFactory firmware plans the move): no ServoJ speed stop, steadier release")
-    ap.add_argument("--yaw", type=float, default=0.0, help="turn the lob toward +y by this many deg (--lob only)")
-    ap.add_argument("--lob", action="store_true",
-                    help="near-vertical full-speed toss (cup ~50 cm from the base); see LOB_* in this file")
-    ap.add_argument("--go", action="store_true")
-    ap.add_argument("--i-checked-with-staff", action="store_true")
+    ap = argparse.ArgumentParser(description="Throw a ball that is already in the gripper.")
+    add_args(ap)
     a = ap.parse_args()
+    if a.distance is None:
+        ap.error("--distance is required")
     go = a.go and a.i_checked_with_staff
     if a.go and not go:
-        print("Refusing to throw live without --i-checked-with-staff (direct joint move, no obstacle checks).")
+        print("Refusing to throw live without --i-checked-with-staff (direct joint moves).")
+    pl = plan_from_args(a, a.distance)
     robot = await connect()
     try:
-        if a.far or a.whip or a.pitch or a.power:
-            fp = far_params(a.distance, a.speed, a.accel, a.release_delay,
-                            "power" if a.power else ("pitch" if a.pitch else ("whip" if a.whip else "far")))
-            print(await throw(robot, a.distance, go, a.scale, not a.no_release, fp["release_delay_s"],
-                              fp["swing_deg"], fp["speed_dps"], fp["accel_dps2"], None, fp["start_j"], a.yaw,
-                              fp["gripper_speed"], a.direct or fp["direct"]))
-        else:
-            print(await throw(robot, a.distance, go, a.scale, not a.no_release, a.release_delay,
-                              swing_from_args(a), a.speed, a.accel, a.wind_z,
-                              LOB_START_J if a.lob else None, a.yaw, None, a.direct))
+        print(await throw(robot, pl, go, not a.no_release, True if a.direct else None))
     finally:
         await robot.close()
 
