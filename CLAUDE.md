@@ -48,9 +48,17 @@ goal is Phase 2: **throw** the ball into a cup out of drop reach.
 - `pick_ball.py`: look, center the camera over the ball, re-detect, then descend / close /
   lift at `PICK_SPEED_DEG_S` (`slow()` restores 60 deg/s in a `finally`). Grab at `GRAB_Z=70`.
   `ball_finder.py` / `white_ball.py`: OpenCV ball detection (orange HSV, white via depth).
-- `cup_aim.py`: angled scan views (`CUP_SCAN`), red-body detection projected to the table.
-  `cup_rim.py`: detects the cup opening by its pink inside (works when the held ball hides
-  the red side). `cup_detection/`: Rohan's newer cup detector package + service.
+- `cup_aim.py`: angled scan views (`CUP_SCAN`). `find_cups` runs, per frame, the rim method
+  (`cup_rim.py`: pink-white opening + red band; positions calibrated by real drops) AND YOLO
+  (`cup_detection.py`), and `combine`s them: same cup (rim box center inside YOLO box) →
+  rim position + YOLO-vs-rim offset recorded; YOLO-only cups → YOLO depth position +
+  `cup_detection.CUP_CORRECTION_MM` (still (0,0): set it from the survey's "YOLO vs rim"
+  line). Viam's red `cup-detector` only when neither found anything. `--no-yolo` = rim only.
+- `cup_detection.py`: YOLO11m-seg (COCO "cup", `cup_vision/core.py`) + `screen()`: keeps only
+  red solo cups (pink opening ≥ 18% of the mask; paper cups / cans ≤ 9% on real frames),
+  drops cut-off openings and boxes inside stronger ones. 3D: rim ellipse fit, else a circle
+  fit to the top 15 mm of depth points. `rotation_search` is off (only added duplicates).
+  `cup_vision/`: the same detector as a Viam vision service (Rohan).
   `cups.py` / `balls.py`: thin original teammate interfaces.
 - `drop.py`: release pose over the rim. Straight down to x≈650. Beyond that, tilt
   forward `o=(0.7,0,-0.7)`. Reach limit ≈ 95 cm.

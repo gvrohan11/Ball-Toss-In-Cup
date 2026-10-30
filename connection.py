@@ -6,7 +6,8 @@
 Network hiccups: the venue Wi-Fi drops briefly and Viam then rejects the next call with
 SESSION_EXPIRED (the SDK starts a fresh session right after). connect() installs a small
 retry on the arm / gripper / camera / vision / motion client calls: transient errors
-(session expired, unavailable, deadline exceeded) are retried up to RETRIES times. All of
+(session expired, unavailable, deadline exceeded, lost connection while the SDK redials)
+are retried up to RETRIES times with backoff (~15 s). All of
 these calls are safe to repeat (move to the same pose, open, grab, read).
 """
 import asyncio
@@ -18,8 +19,8 @@ from viam.robot.client import RobotClient
 
 load_dotenv()
 
-RETRIES = 2
-RETRY_WAIT_S = 0.5
+RETRIES = 6
+RETRY_WAIT_S = (0.5, 1, 2, 3, 4, 5)   # ~15 s total: long enough for the SDK to redial after a drop
 
 
 def _is_transient(exc):
@@ -33,8 +34,10 @@ def _is_transient(exc):
     if isinstance(exc, GRPCError):
         if exc.status == Status.INVALID_ARGUMENT and exc.message == "SESSION_EXPIRED":
             return True
-        return exc.status in (Status.UNAVAILABLE, Status.DEADLINE_EXCEEDED)
-    return isinstance(exc, (ConnectionError, asyncio.TimeoutError))
+        return exc.status in (Status.UNAVAILABLE, Status.DEADLINE_EXCEEDED, Status.CANCELLED)
+    # After a full drop the SDK's local WebRTC proxy socket disappears until it redials:
+    # connecting to it raises FileNotFoundError / ConnectionRefusedError. Wait it out.
+    return isinstance(exc, (ConnectionError, FileNotFoundError, asyncio.TimeoutError, TimeoutError))
 
 
 def _with_retry(fn):
@@ -51,7 +54,7 @@ def _with_retry(fn):
                     raise
                 print(f"  [net] {type(e).__name__}: {getattr(e, 'message', e)} - retrying "
                       f"{fn.__qualname__} ({attempt + 1}/{RETRIES})")
-                await asyncio.sleep(RETRY_WAIT_S)
+                await asyncio.sleep(RETRY_WAIT_S[min(attempt, len(RETRY_WAIT_S) - 1)])
 
     wrapper._retrying = True
     return wrapper
@@ -88,7 +91,7 @@ async def connect() -> RobotClient:
     if missing:
         raise SystemExit(f"Missing {', '.join(missing)} in .env (copy .env.example to .env and fill it in)")
     from viam import logging as viam_logging
-    viam_logging.setLevel(viam_logging.WARNING)   # hide "Connecting to socket" INFO lines
     install_retries()
     opts = RobotClient.Options.with_api_key(api_key=api_key, api_key_id=api_key_id)
+    opts.log_level = viam_logging.WARNING   # at_address applies this; hides "Connecting to socket"
     return await RobotClient.at_address(address, opts)

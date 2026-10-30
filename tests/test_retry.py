@@ -10,7 +10,7 @@ from grpclib.exceptions import GRPCError
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import connection  # noqa: E402
 
-connection.RETRY_WAIT_S = 0
+connection.RETRY_WAIT_S = (0,)
 
 
 def flaky(errors, result="ok"):
@@ -31,7 +31,7 @@ def test_session_expired_is_retried():
 
 def test_gives_up_after_retries():
     err = GRPCError(Status.UNAVAILABLE, "down")
-    fn, calls = flaky([err] * 5)
+    fn, calls = flaky([err] * (connection.RETRIES + 1))
     with pytest.raises(GRPCError):
         asyncio.run(fn())
     assert len(calls) == connection.RETRIES + 1
@@ -51,3 +51,8 @@ def test_install_wraps_client_methods():
     from viam.services.motion.client import MotionClient
     assert getattr(GripperClient.grab, "_retrying", False)
     assert getattr(MotionClient.move, "_retrying", False)
+
+
+def test_lost_proxy_socket_is_retried():
+    fn, calls = flaky([FileNotFoundError(2, "No such file or directory")] * 2)
+    assert asyncio.run(fn()) == "ok" and len(calls) == 3

@@ -25,6 +25,12 @@ class FakeCam:
         return SimpleNamespace(intrinsic_parameters=K)
 
 
+@pytest.fixture(autouse=True)
+def rim_only(monkeypatch):
+    """These tests drive the rim / ball detectors; YOLO has its own tests."""
+    monkeypatch.setattr(cup_aim, "USE_YOLO", False)
+
+
 @pytest.fixture
 def log(tmp_path):
     yield detection_log.start(tmp_path)
@@ -138,6 +144,23 @@ def test_summary_is_readable(log):
     assert "(1000,-121)  rejected: 66 mm wide" in text
     assert "100 cm out, seen 18x  <- too far to drop" in text
     assert "REFUSED: too far" in text and "RESULT: MISS cup_out_of_reach" in text
+
+
+def test_survey_view_saves_one_frame(log):
+    frame, depth = np.zeros((40, 60, 3), np.uint8), np.ones((40, 60), np.uint16)
+    detection_log.context("cup_view_1", max_frames=1)
+    for _ in range(3):                                        # 3 readings per view
+        detection_log.record("cup_rim+yolo", frame, [], depth=depth)
+    detection_log.context("find_ball")                        # ball stages: every frame
+    for _ in range(2):
+        detection_log.record("ball_orange", frame, [])
+    recs = lines(log)
+    assert len(recs) == 5                                     # every reading is still logged
+    assert [bool(r.get("annotated")) for r in recs] == [True, False, False, True, True]
+    assert recs[0]["depth"] == "0001_cup_view_1_depth.png"
+    saved = sorted(p.name for p in log.dir.glob("*_cup_view_1*"))
+    assert saved == ["0001_cup_view_1.jpg", "0001_cup_view_1_depth.png", "0001_cup_view_1_det.jpg"]
+    assert "[img]" in detection_log.summarize(log.dir)
 
 
 def test_annotate_draws_on_a_copy():

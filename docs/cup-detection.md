@@ -2,7 +2,7 @@
 
 ## What is implemented
 
-`cup_detection/core.py` uses **YOLO11m-seg**, a larger neural instance-segmentation
+`cup_vision/core.py` uses **YOLO11m-seg**, a larger neural instance-segmentation
 model, at 1280 pixels with quarter-turn inference over the whole image. It
 recognizes cups without requiring a red exterior. The old standalone color/ring
 candidate generator is disabled by default. Cyan contours are learned masks;
@@ -14,7 +14,7 @@ every viewpoint/occlusion. The exterior's identity cannot be verified when hidde
 The model can later be replaced by cup-specific trained weights with class
 `red_solo_cup`. Confidence is the pretrained model score, not a calibrated Solo-cup probability.
 
-`cup_detection/service.py` exposes Viam detections, paired capture, properties,
+`cup_vision/service.py` exposes Viam detections, paired capture, properties,
 cropped point clouds, and `do_command({"command":"rim_centers"})`. Rim estimates
 use aligned depth on the visible rim, robust plane/circle fitting and arc-coverage
 checks. Diameter is inferred from that fit. Height is inferred only if a nearby
@@ -39,14 +39,14 @@ First inference downloads the official pretrained weights to `.cup-models`.
 Images stay local. Test the supplied images (or substitute your own paths):
 
 ```bash
-python -m scripts.cup_test offline --input /private/tmp/IMG_1924.JPG /private/tmp/IMG_1925.JPG /private/tmp/IMG_1926.JPG --output /tmp/cup-photos --config config/cup-detector.thresholds.json
+python cup_detection.py offline --input /private/tmp/IMG_1924.JPG /private/tmp/IMG_1925.JPG /private/tmp/IMG_1926.JPG --output /tmp/cup-photos --config config/cup-detector.thresholds.json
 open /tmp/cup-photos
 ```
 
 Preview the real Viam camera locally with boxes (requires the existing `.env`):
 
 ```bash
-python -m scripts.cup_test live --config config/cup-detector.thresholds.json
+python cup_detection.py live --config config/cup-detector.thresholds.json
 ```
 
 Press Q/Escape to close. Test side, oblique, overhead and rotated views, cups at
@@ -54,8 +54,8 @@ different image positions, multiple cups, jackets/buckets, and an empty scene.
 Capture and replay paired RGB-D for repeatable tuning:
 
 ```bash
-python -m scripts.cup_test capture --frames 30 --output /tmp/cup-data
-python -m scripts.cup_test offline --input /tmp/cup-data --output /tmp/cup-results --config config/cup-detector.thresholds.json
+python cup_detection.py capture --frames 30 --output /tmp/cup-data
+python cup_detection.py offline --input /tmp/cup-data --output /tmp/cup-results --config config/cup-detector.thresholds.json
 python -m pip install pytest
 python -m pytest -q tests/test_cup_core.py tests/test_cup_service.py tests/test_cup_harness.py
 ```
@@ -86,3 +86,16 @@ No registry registration or live machine configuration was changed.
 
 References: [YOLO11](https://docs.ultralytics.com/models/yolo11/),
 [Viam vision Python API](https://python.viam.dev/autoapi/viam/services/vision/index.html).
+
+## How main.py uses it (Oct 29 merge)
+
+`main.py`'s cup survey calls `cup_aim.find_cups`, which runs the rim method and YOLO on
+every frame (`cup_aim.combine`). YOLO's COCO "cup" class also fires on paper cups, cans and
+mugs, so `cup_detection.screen()` keeps only boxes whose mask is >= 18% pink-white opening
+(0.28-0.68 on every red cup in the Oct 29 survey frames; <= 0.09 on a paper cup, a Coke can
+and a soda can). `rotation_search` is off: the wrist camera is upright and the extra
+quarter-turn passes only produced duplicate cup+neighbor boxes (0.5 s vs 1.7 s per frame).
+Where both methods see a cup, the drop-calibrated rim position is used and the YOLO offset is
+logged; each survey prints the median ("YOLO vs rim") to set `CUP_CORRECTION_MM`. Each survey
+view saves one RGB + depth frame in `observations/detections/` for offline replay with
+`cup_detection.locate_cups`.

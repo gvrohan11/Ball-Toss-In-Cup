@@ -5,6 +5,7 @@ python main.py --go     # runs on the arm (someone on the E-stop!)
 python main.py --go --autotune   # also shift the aim by the average of recent misses in Atlas
 python main.py --go --runs 10    # 10 attempts in a row; put the ball back between them
 python main.py --go --cup 2      # drop into cup 2 of the survey (1 = nearest, default)
+python main.py --go --no-yolo    # cup survey with the rim method only (YOLO off)
 python detection_log.py          # what the camera saw + detected in the last attempt
 
 The table is surveyed FIRST, with the gripper empty (the held ball used to hide the cup's
@@ -27,7 +28,7 @@ from viam.services.motion import MotionClient
 
 import detection_log
 from connection import connect
-from cup_aim import CUP_SCAN, find_cups
+from cup_aim import CUP_SCAN, find_cups   # rim method + YOLO (cup_detection.py) per frame
 from drop import REACH_MAX_MM, drop_in_cup
 from logger import log_attempt, suggest_offset
 from pick_ball import GRIPPER, LOOK, THETA, find_ball, pick
@@ -130,6 +131,9 @@ def _xy(cups):
 async def survey_cups(motion, robot, go):
     """Look at the table from EVERY view in CUP_SCAN (skipping views the planner can't
     reach) and return all cups found, in the world frame, nearest first."""
+    import cup_aim
+    cup_aim.USE_YOLO = "--no-yolo" not in sys.argv
+    cup_aim.YOLO_OFFSETS.clear()
     sightings = []
     for i, look in enumerate(CUP_SCAN, 1):
         name = f"  view {i}/{len(CUP_SCAN)} ({fmt_pose(look)})"
@@ -138,7 +142,7 @@ async def survey_cups(motion, robot, go):
         except Exception as e:
             print(f"{name}: can't reach, skipped ({str(e)[:60]})")
             continue
-        detection_log.context(f"cup_view_{i}", view=look)
+        detection_log.context(f"cup_view_{i}", max_frames=1, view=look)   # images for 1 frame per view
         seen = []
         for _ in range(CUP_READINGS):
             seen += await find_cups(robot, topdown=(look["o_z"] == -1))
@@ -152,6 +156,7 @@ async def survey_cups(motion, robot, go):
     cups = merge_sightings(sightings)
     detection_log.context("survey")
     detection_log.event("survey", cups=cups, sightings=sightings)
+    yolo_vs_rim(cup_aim.YOLO_OFFSETS)
     print(f"  TABLE SURVEY: {len(cups)} cup(s)")
     for n, c in enumerate(cups, 1):
         x, y, z = c["pos_mm"]
@@ -159,6 +164,20 @@ async def survey_cups(motion, robot, go):
               f"seen {c['sightings']}x" + ("" if c["reachable"] else
                                            f"  <- too far to drop (max {REACH_MAX_MM / 10:.0f} cm)"))
     return cups
+
+
+def yolo_vs_rim(offsets):
+    """Median (rim - YOLO) offset over cups both methods saw: what cup_detection.
+    CUP_CORRECTION_MM should be. Printed + logged every survey so it can be set from data."""
+    if not offsets:
+        return None
+    import cup_detection
+    dx = sorted(o[0] for o in offsets)[len(offsets) // 2]
+    dy = sorted(o[1] for o in offsets)[len(offsets) // 2]
+    print(f"  YOLO vs rim on {len(offsets)} shared sightings: rim - YOLO = ({dx:+.0f}, {dy:+.0f}) mm "
+          f"(cup_detection.CUP_CORRECTION_MM is {cup_detection.CUP_CORRECTION_MM})")
+    detection_log.event("yolo_vs_rim", median_offset_mm=(dx, dy), n=len(offsets))
+    return dx, dy
 
 
 def chosen_cup_number(cups):
@@ -273,6 +292,7 @@ async def run_once(robot, motion, go, home, t0):
 
 def _run_config():
     import cup_aim
+    import cup_detection
     import drop
     import pick_ball
     return {"theta": THETA, "home": list(LOOK),
@@ -280,6 +300,8 @@ def _run_config():
             "grab_z": pick_ball.GRAB_Z, "hover_z": pick_ball.HOVER_Z,
             "rim_correction_mm": list(cup_aim.RIM_CORRECTION_MM),
             "topdown_correction_mm": list(cup_aim.TOPDOWN_CORRECTION_MM),
+            "cup_detection": "rim" if "--no-yolo" in sys.argv else "rim+yolo",
+            "yolo_cup_correction_mm": list(cup_detection.CUP_CORRECTION_MM),
             "release_above_rim_mm": drop.RELEASE_ABOVE_RIM_MM,
             "pick_speed_deg_s": pick_ball.PICK_SPEED_DEG_S,
             "ball_color": pick_ball.BALL_COLOR,

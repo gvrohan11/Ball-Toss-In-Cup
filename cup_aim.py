@@ -169,23 +169,83 @@ def cup_boxes(dets):
     return [d for d in dets if d.x_max - d.x_min >= 25 and d.y_max - d.y_min >= 25]
 
 
+# YOLO (cup_detection.py) runs on every frame next to the rim method. Rim positions are
+# calibrated by real drops, so when both see the same cup the rim position is used and the
+# YOLO-vs-rim offset is recorded (YOLO_OFFSETS) to calibrate cup_detection.CUP_CORRECTION_MM.
+# Cups only YOLO sees (rim rejected or missed them) are added with YOLO's depth position.
+USE_YOLO = True           # main.py --no-yolo: rim method only
+YOLO_OFFSETS = []         # (dx, dy) rim minus raw YOLO, mm, one per matched sighting
+_yolo_off = None          # reason YOLO was switched off for this run (missing model/library)
+_yolo_errors = set()
+
+
+async def _yolo_cups(robot, seen):
+    """Run YOLO on the current view; fills seen (frame, depth, items). Never raises."""
+    global _yolo_off
+    if not USE_YOLO or _yolo_off:
+        return
+    try:
+        import cup_detection
+        await cup_detection.find_cups(robot, seen=seen)
+    except (ImportError, FileNotFoundError) as e:     # can't work this run: say so once
+        _yolo_off = f"{type(e).__name__}: {e}"
+        print(f"  [cup] YOLO unavailable ({str(e)[:80]}); rim method only")
+    except Exception as e:                            # bad frame / arm moved: skip this frame
+        msg = f"{type(e).__name__}: {str(e)[:80]}"
+        if msg not in _yolo_errors:                   # each distinct problem printed once
+            _yolo_errors.add(msg)
+            print(f"  [cup] YOLO skipped a frame ({msg})")
+
+
+def combine(calibrated_items, yolo_items):
+    """Cups for one frame: every calibrated (rim / red-body) cup, plus YOLO cups they don't
+    already cover. Same cup = the calibrated box's center lies inside the YOLO box.
+    Marks the YOLO items in place; returns the extra cups (world mm, corrected)."""
+    import cup_detection
+    extra = []
+    for it in yolo_items:
+        if not it.get("kept") or it.get("world_mm") is None:
+            continue
+        x0, y0, x1, y1 = it["box"]
+        raw = tuple(it["world_mm"])
+        same = next((c for c in calibrated_items
+                     if x0 <= (c["box"][0] + c["box"][2]) / 2 <= x1
+                     and y0 <= (c["box"][1] + c["box"][3]) / 2 <= y1), None)
+        if same is not None:
+            off = (same["world_mm"][0] - raw[0], same["world_mm"][1] - raw[1])
+            it.update(duplicate_of=same["kind"], offset_vs_rim_mm=off)
+            YOLO_OFFSETS.append(off)
+            continue
+        cx, cy = cup_detection.CUP_CORRECTION_MM
+        cup = (raw[0] + cx, raw[1] + cy, raw[2])
+        it.update(world_mm=cup, raw_world_mm=raw)
+        extra.append(cup)
+    return extra
+
+
 async def find_cups(robot, topdown=False):
     """Rim centers (x, y, z) in mm, world frame, of every cup in the CURRENT view ([] if none).
-    Tries the rim method first, then the red-body detector (angled views only)."""
+    Rim method + YOLO on every frame (see combine); the red-body detector only when
+    neither found anything in an angled view."""
     seen = {"items": []}
     try:
         cups = await find_cups_by_rim(robot, topdown, seen)
-    except Exception as e:  # never let the new path break the loop
-        print(f"  [cup] rim method failed ({e}); trying cup-detector")
+    except Exception as e:  # never let one method break the loop
+        print(f"  [cup] rim method failed ({e})")
         cups = []
-    if cups or topdown:
-        detection_log.record("cup_rim", seen.get("frame"), seen["items"], topdown=topdown)
-        return cups
+    ys = {}
+    await _yolo_cups(robot, ys)
+    yolo_items = ys.get("items", [])
+    detector = "cup_rim" + ("+yolo" if ys else "")
     try:
-        cups = await _cups_from_red_bodies(robot, seen["items"])
+        if not cups and not topdown and not any(it.get("kept") for it in yolo_items):
+            detector += "+detector"
+            cups = await _cups_from_red_bodies(robot, seen["items"])
+        calibrated = [it for it in seen["items"] if it.get("kept") and it.get("world_mm") is not None]
+        cups = cups + combine(calibrated, yolo_items)
     finally:
-        # the rim step's frame: same view, a moment earlier than cup-detector's own grab
-        detection_log.record("cup_rim+detector", seen.get("frame"), seen["items"], topdown=topdown)
+        detection_log.record(detector, seen.get("frame") if seen.get("frame") is not None else ys.get("frame"),
+                             seen["items"] + yolo_items, depth=ys.get("depth"), topdown=topdown)
     return cups
 
 
