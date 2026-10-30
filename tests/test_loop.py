@@ -334,6 +334,7 @@ def missing(pick_rig, monkeypatch):
 
     grip.grab = grab
     monkeypatch.setattr(pick_ball, "locate_ball", locate)
+    monkeypatch.setattr(pick_ball, "CLOSEUP_READINGS", 1)        # one reading per look in these fakes
     monkeypatch.setattr(pick_ball.asyncio, "sleep", no_wait)     # wait_gripper polls fast
     return grip, motion, state
 
