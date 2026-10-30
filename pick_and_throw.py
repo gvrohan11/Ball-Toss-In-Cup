@@ -60,6 +60,13 @@ async def run(args):
                 print("no cup found - not throwing")
                 return
             yaw = throw.yaw_for_cup(cup[0], cup[1])
+            import math
+            if abs(math.hypot(cup[0], cup[1]) - throw.LOB_RELEASE_RADIUS_MM) > 80 and not getattr(args, "force_aim", False):
+                print(f"cup is {math.hypot(cup[0], cup[1]):.0f} mm from the base but the lob only lands "
+                      f"~{throw.LOB_RELEASE_RADIUS_MM} mm out: not picking or throwing. Move the cup to ~48 cm "
+                      "from the base (measure with a tape), or use --force-aim to throw anyway.")
+                await move_to(motion, HOME, go, "home")
+                return
             await move_to(motion, HOME, go, "home")
 
         print("1) find ball")
@@ -110,6 +117,7 @@ def main():
     ap.add_argument("--wind-z", type=float, default=None, help="wind-up height mm (default 450; try 650 for a lob)")
     ap.add_argument("--lob", action="store_true", help="near-vertical full-speed toss (cup ~50 cm from the base)")
     ap.add_argument("--yaw", type=float, default=0.0, help="turn the lob toward +y by this many deg (--lob only)")
+    ap.add_argument("--force-aim", action="store_true", help="with --aim-cup: throw even if the cup is out of range")
     ap.add_argument("--aim-cup", action="store_true",
                     help="scan for the cup first and turn the lob toward it (--lob only)")
     ap.add_argument("--j2", type=float, default=None, help="shoulder swing deg (negative = forward+down)")
