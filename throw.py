@@ -251,15 +251,25 @@ FAR_OPEN_LEAD_S = 0.43    # gripper starts moving ~0.3 s after open(); have it o
 # Same optimizer, but the ball is HELD until the fingers open (timed release), so the wrist can
 # add speed the flange limit doesn't see. Start: ball (367, 0, 561), fingers down. End: (671, 0, 795).
 # Release (start of braking) ~(577, 0, 683). Flange 1.12 m/s at 180 deg/s (limit ~1.26-1.44).
-# Model landing x0.9 (the FAR throw landed ~10% shorter than its model at 150 deg/s).
+# Model landing x1.05: live 116 deg/s landed ~1040 mm vs 989 modeled (15 cm past a cup at 892).
 WHIP_START_J = (3.6, -75.5, -91.1)
 WHIP_SWING = {1: -16.2, 2: -38.1, 4: +37.9}
-WHIP_TABLE = [(s, round(d * 0.9)) for s, d in
+WHIP_TABLE = [(s, round(d * 1.05)) for s, d in
               [(90, 897), (100, 931), (110, 966), (120, 1004), (135, 1065), (150, 1129), (165, 1197), (180, 1266)]]
 WHIP_OPEN_LEAD_S = 0.40   # ball should be free right as the arm starts braking (fastest point)
 
+# PITCH: underhand pitch with a real backswing (optimized Oct 29 19:30): 109 deg of wrist at full speed.
+# Start: ball (255, 0, 263), fingers pointing back/up. The wrist sweeps the ball down and under (lowest
+# ~19 cm above the base plane), releases ~(598, 0, 367) going 1.54 m/s, 63 deg up at 180 deg/s; lands
+# steep (75 deg). Flange only 0.94 m/s. Table = model x1.05 (the WHIP landed ~5% past its model).
+PITCH_START_J = (-57.7, -59.9, -116.9)
+PITCH_SWING = {1: +58.8, 2: +2.8, 4: +109.1}
+PITCH_TABLE = [(s, round(d * 1.05)) for s, d in [(120, 750), (135, 778), (150, 810), (165, 845), (180, 883)]]
+
 PRESETS = {
     "far": dict(start_j=FAR_START_J, swing=FAR_SWING, table=FAR_TABLE, lead=FAR_OPEN_LEAD_S, min_speed=100.0),
+    "pitch": dict(start_j=PITCH_START_J, swing=PITCH_SWING, table=PITCH_TABLE, lead=WHIP_OPEN_LEAD_S,
+                  min_speed=120.0),
     "whip": dict(start_j=WHIP_START_J, swing=WHIP_SWING, table=WHIP_TABLE, lead=WHIP_OPEN_LEAD_S, min_speed=90.0),
 }
 
@@ -337,6 +347,8 @@ async def _main():
                     help="wind-up height mm (default 450). Higher start = longer swing path = a higher lob (try 650)")
     ap.add_argument("--far", action="store_true",
                     help="open-hand forward toss for a cup 84-98 cm from the base (speed picked from --distance)")
+    ap.add_argument("--pitch", action="store_true",
+                    help="underhand pitch: long 109-deg backswing at full speed, steep 63-deg launch (cup ~79-93 cm)")
     ap.add_argument("--whip", action="store_true",
                     help="wrist-whip throw, ~2x faster, 42-53 deg up (cup ~85-115 cm; speed from --distance)")
     ap.add_argument("--yaw", type=float, default=0.0, help="turn the lob toward +y by this many deg (--lob only)")
@@ -350,8 +362,9 @@ async def _main():
         print("Refusing to throw live without --i-checked-with-staff (direct joint move, no obstacle checks).")
     robot = await connect()
     try:
-        if a.far or a.whip:
-            fp = far_params(a.distance, a.speed, a.accel, a.release_delay, "whip" if a.whip else "far")
+        if a.far or a.whip or a.pitch:
+            fp = far_params(a.distance, a.speed, a.accel, a.release_delay,
+                            "pitch" if a.pitch else ("whip" if a.whip else "far"))
             print(await throw(robot, a.distance, go, a.scale, not a.no_release, fp["release_delay_s"],
                               fp["swing_deg"], fp["speed_dps"], fp["accel_dps2"], None, fp["start_j"], a.yaw,
                               fp["gripper_speed"]))

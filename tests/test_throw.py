@@ -186,3 +186,13 @@ def test_whip_inside_limits_and_faster_table():
     assert throw.far_speed_for(5000, "whip") == 180.0
     fp = throw.far_params(850, preset="whip")
     assert fp["start_j"] == throw.WHIP_START_J and fp["gripper_speed"] == 5000
+
+
+def test_pitch_inside_limits():
+    start = [0.0, throw.PITCH_START_J[0], throw.PITCH_START_J[1], 0.0, throw.PITCH_START_J[2], 0.0]
+    end = list(start)
+    for j, d in throw.PITCH_SWING.items():
+        end[j] += d
+    throw.check_limits(start, end)
+    assert 160 < throw.far_speed_for(892, "pitch") <= 180
+    assert throw.far_release_delay(170, preset="pitch") > 0.1
