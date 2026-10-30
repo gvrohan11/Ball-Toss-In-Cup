@@ -40,15 +40,26 @@ PROMPT = ("Result? 'in' (target) or 'in 3' (went into cup 3) | 'rim front' / 'ri
           "'drop' (fell out early) | blank = skip: ")
 
 
+CUP_REF = re.compile(r"\b(?:in|on|at|of|into|cup|number|num|no|#)\s*(?:cup\s*)?#?\s*(\d+)\b")
+MISS_WORDS = ("short", "long", "miss", "missed", "past", "over", "left", "right", "wide")
+
+
 def parse_landing(s):
-    """Typed answer -> result dict (None = skip). Every miss gets an explicit outcome, so a 0 is never
-    ambiguous again (Oct 29: 34 of 69 misses were logged as long_cm 0).
-    Plain phrases work: "in", "in 3", "hit number 1", "went in cup 2", "rim", "rim of 4", "drop"."""
+    """Typed answer -> result dict (None = skip). Every miss gets an explicit outcome.
+    A number right after in/on/at/cup is a CUP NUMBER, never a distance:
+      "in" / "in 3" / "hit number 1"        -> in (that cup)
+      "rim front" / "front rim in 5"        -> bounced out, landed ~RIM_CM short (back = long)
+      "-5" / "short 5 on 3" / "short -4 in 4" -> 5 / 4 cm short (a miss, at that cup)
+      "12, -3" / "long 12"                   -> 12 cm long (3 cm right)
+      "drop"                                 -> fell out of the hand"""
     s = s.strip().lower()
     if not s:
         return None
     words = re.findall(r"[a-z]+", s)
-    nums = [float(x) for x in re.findall(r"-?\d+(?:\.\d+)?", s)]
+    m = CUP_REF.search(s)
+    cup = int(m.group(1)) if m else None
+    rest = (s[:m.start()] + " " + s[m.end():]) if m else s
+    nums = [float(x) for x in re.findall(r"-?\d+(?:\.\d+)?", rest)]
     if "rim" in words or any(w.startswith("bounce") for w in words):
         # which rim: front = landed short of the centre, back = long (cup opening radius ~4.7 cm)
         side = -RIM_CM if any(w in ("front", "near", "short") for w in words) else \
@@ -56,23 +67,29 @@ def parse_landing(s):
         res = {"hit": False, "outcome": "rim_out", "long_cm": side}
         if side:
             res["rim_side"] = "front" if side < 0 else "back"
-        if nums:
-            res["rim_cup"] = int(abs(nums[0]))
+        if cup is not None:
+            res["rim_cup"] = cup
         return res
-    if any(w in ("drop", "dropped", "fell", "dribble", "dribbled") for w in words) or s in ("d",):
+    if any(w in ("drop", "dropped", "fell", "dribble", "dribbled") for w in words) or s == "d":
         return {"hit": False, "outcome": "dropped"}
-    if any(w in ("in", "y", "yes", "hit", "inside", "made", "score", "scored") for w in words):
+    is_miss = bool(nums) or any(w in MISS_WORDS for w in words)
+    if not is_miss and any(w in ("in", "y", "yes", "hit", "inside", "made", "score", "scored") for w in words):
         res = {"hit": True, "outcome": "in"}
-        if nums:
+        if cup is not None:
+            res["cup_number"] = cup
+        elif nums:
             res["cup_number"] = int(abs(nums[0]))
         return res
     if not nums:
         return None
-    long_cm = nums[0]
+    long_cm = abs(nums[0]) * (-1 if "short" in words else 1 if any(w in ("long", "past", "over") for w in words)
+                             else (1 if nums[0] >= 0 else -1))
     res = {"hit": False, "long_cm": long_cm,
            "outcome": "long" if long_cm > 0 else "short" if long_cm < 0 else "rim_out"}
     if len(nums) > 1:
         res["left_cm"] = nums[1]
+    if cup is not None:
+        res["at_cup"] = cup
     return res
 
 
@@ -186,6 +203,8 @@ async def fill_cups(robot, motion, args, go, cups, ratio):
     while targets:
         cup = targets[0]
         print(f"\n=== ball {throws + 1} -> {_cup_str(cup)} ({len(targets)} cup(s) left) ===")
+        if go and args.speed is None and not args.no_learn:
+            ratio = throw.learned_ratio(args)                # re-learn from the throws just made
         pl = plan_for(args, cup, ratio)                      # safety-checked BEFORE picking
         res = await throw_at(robot, motion, args, go, pl, cup, time.monotonic())
         if res.get("failure") == "no_ball_found":

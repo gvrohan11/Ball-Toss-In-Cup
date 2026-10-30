@@ -280,3 +280,25 @@ def test_rim_front_back():
     assert f["outcome"] == "rim_out" and f["long_cm"] == -pt.RIM_CM and f["rim_side"] == "front"
     assert pt.parse_landing("rim back 4")["long_cm"] == pt.RIM_CM
     assert pt.parse_landing("rim")["long_cm"] == 0.0
+
+
+def test_cup_numbers_are_never_distances():
+    assert pt.parse_landing("short -4 in 4") == {"hit": False, "long_cm": -4.0, "outcome": "short", "at_cup": 4}
+    r = pt.parse_landing("short-5 on 3")
+    assert r["long_cm"] == -5 and r["at_cup"] == 3 and "left_cm" not in r and r["hit"] is False
+    assert pt.parse_landing("short 5")["long_cm"] == -5
+    assert pt.parse_landing("long 12")["long_cm"] == 12
+    assert pt.parse_landing("in 4") == {"hit": True, "outcome": "in", "cup_number": 4}
+    assert pt.parse_landing("in") == {"hit": True, "outcome": "in"}
+    f = pt.parse_landing("front rim in 5")
+    assert f["outcome"] == "rim_out" and f["long_cm"] == -pt.RIM_CM and f["rim_cup"] == 5
+    assert pt.parse_landing("12, -3") == {"hit": False, "long_cm": 12.0, "outcome": "long", "left_cm": -3.0}
+
+
+def test_fill_cups_relearns_before_every_throw(rig, monkeypatch):
+    fake_survey(monkeypatch, [(950.0, -250.0, 100.0), (980.0, 0.0, 100.0)])
+    plans, _ = recorder(monkeypatch, [{"hit": True, "outcome": "in"}, {"hit": True, "outcome": "in"}])
+    ratios = iter([1.0, 0.95, 0.90])
+    monkeypatch.setattr(pt.throw, "learned_ratio", lambda a: next(ratios))
+    asyncio.run(pt.run(args(fill_cups=True, distance=None, no_learn=False)))
+    assert [p["ratio"] for p in plans] == [0.95, 0.9]

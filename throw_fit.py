@@ -18,7 +18,7 @@ import statistics
 import sys
 
 MIN_THROWS = 3           # fewer than this -> no correction (1.0)
-RECENT = 15              # use the newest N usable throws
+RECENT = 8               # newest N usable throws (Oct 30: 15 reacted too slowly to a 4-5 cm short bias)
 CLAMP = (0.8, 1.25)      # never trust a correction outside this
 DIST_OK = (300, 2500)    # mm; Oct 29 had hand-typed distances like 10 / 50 / 2000 as speed hacks
 
