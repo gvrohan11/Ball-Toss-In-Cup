@@ -140,3 +140,18 @@ def test_landing_answer_accepts_units(monkeypatch):
         assert pt.ask_landing()["long_cm"] == want
     monkeypatch.setattr("builtins.input", lambda prompt="": "in")
     assert pt.ask_landing() == {"hit": True}
+
+
+def test_aim_cup_refuses_when_cup_is_out_of_range(rig, monkeypatch):
+    m, events = rig
+    import main as main_mod
+    async def scan(motion, robot, go):
+        return (836.0, -135.0, 100.0)
+    monkeypatch.setattr(main_mod, "scan_for_cup", scan)
+    thrown = []
+    async def throw(*a, **k):
+        thrown.append(1)
+        return {}
+    monkeypatch.setattr(pt.throw, "throw", throw)
+    asyncio.run(pt.run(args(lob=True, aim_cup=True)))
+    assert thrown == []
