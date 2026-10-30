@@ -199,3 +199,10 @@ def test_roll_tilt_and_open_overrides(fake):
     assert ("grip_cmd", {"set": 412.0}) in fake
     with pytest.raises(ValueError):
         throw.plan(960, "cradle", tilt_up=40)
+
+
+def test_power_always_opens_partway(fake):
+    pl = throw.plan(947, "power")
+    asyncio.run(throw.throw(object(), pl, True))
+    assert ("open",) not in fake
+    assert any(e[0] == "grip_cmd" and "set" in e[1] for e in fake)

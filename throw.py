@@ -223,6 +223,8 @@ async def throw(robot, pl, go, release=True, direct=None, partial=False, check_o
     check_only: go to the wind-up pose (cradle: open the cradle), hold 3 s, close, go home. No swing."""
     direct = pl["direct"] if direct is None else direct
     cradle = pl.get("release_mode") == "cradle"
+    if pl["preset"] == "power" and not pl.get("full_open"):
+        partial = True             # the working combination (Oct 30): POWER always opens partway
     print(f"1) wind up (joint move) to J2={pl['start_j'][1]} J3={pl['start_j'][2]} J5={pl['start_j'][4]}, "
           f"yaw {pl['yaw_deg']:+.1f} deg")
     print(f"2) {pl['preset'].upper()} swing at {pl['speed_dps']:.0f} deg/s"
@@ -334,12 +336,14 @@ async def throw(robot, pl, go, release=True, direct=None, partial=False, check_o
 def add_args(ap):
     """Throw options shared by throw.py and pick_and_throw.py."""
     ap.add_argument("--distance", type=float, default=None, help="cup distance from the base, mm")
-    ap.add_argument("--power", action="store_true", help="full-force preset for 1-2 m (direct mode)")
+    ap.add_argument("--power", action="store_true",
+                    help="POWER throw (the DEFAULT since Oct 30: direct mode, partial open, ~0.8-2 m)")
+    ap.add_argument("--far", action="store_true", help="old open-hand FAR throw (releases late on the robot)")
     ap.add_argument("--cradle", action="store_true",
                     help="spoon throw: FAR swing, fingers above/below the ball, partial open at swing start")
     ap.add_argument("--cradle-check", action="store_true",
                     help="go to the cradle wind-up, open the cradle, hold 3 s, close, go home. NO swing")
-    ap.add_argument("--partial", action="store_true", help="timed release opens partway, not fully")
+    ap.add_argument("--partial", action="store_true", help="timed release opens partway (always on for POWER)")
     ap.add_argument("--roll", type=float, default=None,
                     help="wrist roll J6 (deg, absolute) during the throw; cradle default 90. Try 0 / 180 / -90")
     ap.add_argument("--tilt-up", type=float, default=0.0, help="raise the fingers this many deg (J5) for the throw")
@@ -356,10 +360,16 @@ def add_args(ap):
     ap.add_argument("--i-checked-with-staff", action="store_true")
 
 
+DEFAULT_PRESET = "power"   # Oct 30 on the robot computer: POWER + partial open filled cups 1 and 2 of an arc
+                           # at ~92 cm, 2 for 2 (speed picked by throw_fit, x0.915). FAR/cradle exit too late.
+
+
 def preset_from_args(a):
     if getattr(a, "cradle", False) or getattr(a, "cradle_check", False):
         return "cradle"
-    return "power" if a.power else "far"
+    if getattr(a, "far", False):
+        return "far"
+    return "power" if getattr(a, "power", False) else DEFAULT_PRESET
 
 
 def learned_ratio(a):
