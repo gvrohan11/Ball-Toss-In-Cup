@@ -48,7 +48,10 @@ LIMIT_MARGIN_DEG = 5
 # First live throw (Oct 29, full speed): released at 200 ms and the ball just dropped when the arm
 # stopped - the open command + finger travel add ~0.2 s, so 200 ms landed at the END of the ~0.4 s
 # swing. Start much earlier and tune with --release-delay (try 0.0 / 0.05 / 0.1).
-RELEASE_TABLE = [(900, 0.03), (1100, 0.05), (1300, 0.08)]
+# Measured Oct 29 (gripper_timing_test): open() takes ~0.3 s to start and ~0.4 s until the ball is
+# free, and the full swing lasts ~0.4 s. So the open command must go out BEFORE the swing:
+# negative delay = seconds before the swing starts. Ball lets go ~ (0.4 + delay) s into the swing.
+RELEASE_TABLE = [(900, -0.25), (1100, -0.20), (1300, -0.15)]
 # theta=0 on purpose: with theta=180 the planner turned the wrist (J6) from ~0 to -180, a visible
 # half turn before every throw. Same position/tilt/joints J1-J5 (checked on the real arm Oct 29);
 # only the wrist angle differs, and the swing uses J3/J5 only.
@@ -98,8 +101,8 @@ async def throw(robot, distance_mm, go, scale=1.0, release=True, release_delay_s
     motion = MotionClient.from_robot(robot, "builtin")
     arm, gripper = Arm.from_robot(robot, ARM), Gripper.from_robot(robot, GRIPPER)
     delay = release_delay(distance_mm) if release_delay_s is None else float(release_delay_s)
-    if not 0.0 <= delay <= 0.6:
-        raise ValueError("--release-delay must be between 0 and 0.6 s")
+    if not -0.6 <= delay <= 0.6:
+        raise ValueError("--release-delay must be between -0.6 and 0.6 s")
     print(f"1) wind up (planned move) to {WIND_UP}")
     if go:
         ok = await motion.move(GRIPPER, PoseInFrame(reference_frame="world", pose=Pose(**WIND_UP)))
@@ -119,16 +122,37 @@ async def throw(robot, distance_mm, go, scale=1.0, release=True, release_delay_s
     try:
         await arm.do_command({"set_speed": speed, "set_acceleration": accel})
         t0 = time.monotonic()
-        swing = asyncio.create_task(arm.move_to_joint_positions(JointPositions(values=end)))
         t_open_call = t_open_done = None
-        if release:
-            await asyncio.sleep(delay)
+        open_task = None
+
+        async def open_gripper():
+            nonlocal t_open_call, t_open_done
             t_open_call = time.monotonic() - t0
             await gripper.open()
             t_open_done = time.monotonic() - t0
+
+        if release and delay < 0:
+            # The gripper reacts ~0.3-0.4 s after the command (measured Oct 29), so to let go
+            # mid-swing the open command goes out BEFORE the swing starts.
+            open_task = asyncio.create_task(open_gripper())
+            await asyncio.sleep(-delay)
+            t0_swing = time.monotonic()
+            swing = asyncio.create_task(arm.move_to_joint_positions(JointPositions(values=end)))
+        else:
+            t0_swing = time.monotonic()
+            swing = asyncio.create_task(arm.move_to_joint_positions(JointPositions(values=end)))
+            if release:
+                await asyncio.sleep(delay)
+                open_task = asyncio.create_task(open_gripper())
         await swing
-        t_swing = time.monotonic() - t0
-        timing = {"open_called_s": t_open_call, "open_returned_s": t_open_done, "swing_done_s": t_swing}
+        t_swing = time.monotonic() - t0_swing
+        if open_task is not None:
+            await open_task
+        # times relative to the START OF THE SWING (negative = before it)
+        shift = t0_swing - t0
+        timing = {"open_called_s": None if t_open_call is None else t_open_call - shift,
+                  "open_returned_s": None if t_open_done is None else t_open_done - shift,
+                  "swing_done_s": t_swing}
         print("   timing (s from swing start): " + ", ".join(
             f"{k.replace('_s', '')}={v:.2f}" for k, v in timing.items() if v is not None))
     finally:
@@ -147,8 +171,8 @@ async def _main():
                     help="0.1-1: shrink swing angles and speed (use 0.2-0.3 for the first live look)")
     ap.add_argument("--no-release", action="store_true", help="swing but never open the gripper")
     ap.add_argument("--release-delay", type=float, default=None,
-                    help="seconds after the swing starts to open the gripper (default: table). "
-                         "Dropping straight down = too late; try 0.0, 0.05, 0.1")
+                    help="seconds after the swing starts to send the open command (default: table). "
+                         "NEGATIVE = open first: the gripper takes ~0.4 s to let go, so try -0.3 / -0.2 / -0.1")
     ap.add_argument("--go", action="store_true")
     ap.add_argument("--i-checked-with-staff", action="store_true")
     a = ap.parse_args()
