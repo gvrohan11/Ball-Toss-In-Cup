@@ -206,3 +206,8 @@ def test_power_always_opens_partway(fake):
     asyncio.run(throw.throw(object(), pl, True))
     assert ("open",) not in fake
     assert any(e[0] == "grip_cmd" and "set" in e[1] for e in fake)
+
+
+def test_rim_side_moves_the_landing():
+    assert throw_fit.landing_mm(doc("power", 80, 920, outcome="rim_out", long_cm=-4.0)) == 880
+    assert throw_fit.landing_mm(doc("power", 80, 920, outcome="rim_out", long_cm=0.0)) == 920

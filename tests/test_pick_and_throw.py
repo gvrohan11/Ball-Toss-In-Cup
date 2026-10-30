@@ -273,3 +273,10 @@ def test_default_is_power_and_far_still_available():
     assert throw.preset_from_args(args()) == "power"
     assert throw.preset_from_args(args(far=True)) == "far"
     assert throw.preset_from_args(args(cradle=True)) == "cradle"
+
+
+def test_rim_front_back():
+    f = pt.parse_landing("rim front")
+    assert f["outcome"] == "rim_out" and f["long_cm"] == -pt.RIM_CM and f["rim_side"] == "front"
+    assert pt.parse_landing("rim back 4")["long_cm"] == pt.RIM_CM
+    assert pt.parse_landing("rim")["long_cm"] == 0.0
