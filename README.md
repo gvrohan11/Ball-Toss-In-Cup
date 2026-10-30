@@ -7,6 +7,7 @@ Program to make a ufactory A850 robot throw a ball into a cup
 pip install viam-sdk==0.85.1 python-dotenv pymongo opencv-python numpy scipy
 cp .env.example .env        # fill VIAM_ADDRESS / VIAM_API_KEY / VIAM_API_KEY_ID / MONGODB_URI
 python check_connection.py  # read-only check
+python home.py              # send the arm to the saved safe home pose
 python main.py              # dry run: prints the plan, moves nothing, logs nothing
 python main.py --go         # live: home -> find + pick ball -> scan for cup -> drop -> home
 python main.py --go --autotune   # also correct the aim from recent misses stored in Atlas
