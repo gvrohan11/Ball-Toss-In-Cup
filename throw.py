@@ -95,7 +95,7 @@ async def _go_home(motion, tries=3):
 
 
 async def throw(robot, distance_mm, go, scale=1.0, release=True, release_delay_s=None,
-                swing_deg=None, speed_dps=None, accel_dps2=None):
+                swing_deg=None, speed_dps=None, accel_dps2=None, wind_z=None):
     """scale (0.1..1) shrinks the swing angles AND the speed: use 0.2-0.3 first, empty gripper,
     release=False, to watch the motion before any real throw."""
     if not 0.1 <= scale <= 1.0:
@@ -105,9 +105,14 @@ async def throw(robot, distance_mm, go, scale=1.0, release=True, release_delay_s
     delay = release_delay(distance_mm) if release_delay_s is None else float(release_delay_s)
     if not -0.6 <= delay <= 0.6:
         raise ValueError("--release-delay must be between -0.6 and 0.6 s")
-    print(f"1) wind up (planned move) to {WIND_UP}")
+    wind = dict(WIND_UP)
+    if wind_z is not None:
+        if not 300 <= wind_z <= 800:
+            raise ValueError("--wind-z must be between 300 and 800 mm")
+        wind["z"] = wind_z
+    print(f"1) wind up (planned move) to {wind}")
     if go:
-        ok = await motion.move(GRIPPER, PoseInFrame(reference_frame="world", pose=Pose(**WIND_UP)))
+        ok = await motion.move(GRIPPER, PoseInFrame(reference_frame="world", pose=Pose(**wind)))
         if ok is False:
             raise RuntimeError("wind-up move failed")
     start = list((await arm.get_joint_positions()).values) if go else [0.0] * 6
@@ -194,6 +199,8 @@ async def _main():
                     help="shoulder swing deg. MEASURED: negative = gripper forward+down, positive = back+up")
     ap.add_argument("--j3", type=float, default=None, help="elbow swing deg (default -35: up and forward)")
     ap.add_argument("--j5", type=float, default=None, help="wrist swing deg (default +45: tips forward)")
+    ap.add_argument("--wind-z", type=float, default=None,
+                    help="wind-up height mm (default 450). Higher start = longer swing path = a higher lob (try 650)")
     ap.add_argument("--go", action="store_true")
     ap.add_argument("--i-checked-with-staff", action="store_true")
     a = ap.parse_args()
@@ -203,7 +210,7 @@ async def _main():
     robot = await connect()
     try:
         print(await throw(robot, a.distance, go, a.scale, not a.no_release, a.release_delay,
-                          swing_from_args(a), a.speed, a.accel))
+                          swing_from_args(a), a.speed, a.accel, a.wind_z))
     finally:
         await robot.close()
 

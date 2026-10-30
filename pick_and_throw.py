@@ -67,7 +67,7 @@ async def run(args):
             print("3) throw")
             await move_to(motion, HOME, go, "home")
             info = await throw.throw(robot, args.distance, go, args.scale, not args.no_release,
-                                     args.release_delay, throw.swing_from_args(args), args.speed, args.accel)
+                                     args.release_delay, throw.swing_from_args(args), args.speed, args.accel, args.wind_z)
         except BaseException as e:  # error or Ctrl+C: don't leave the ball in the gripper
             print(f"!! stopped ({type(e).__name__}: {e}); putting the ball back")
             await put_ball_back(robot, motion, ball, go)
@@ -94,6 +94,7 @@ def main():
     ap.add_argument("--no-release", action="store_true")
     ap.add_argument("--speed", type=float, default=None, help="swing speed deg/s (default 150, max 180)")
     ap.add_argument("--accel", type=float, default=None, help="swing accel deg/s2 (default 900, max 1145)")
+    ap.add_argument("--wind-z", type=float, default=None, help="wind-up height mm (default 450; try 650 for a lob)")
     ap.add_argument("--j2", type=float, default=None, help="shoulder swing deg (negative = forward+down)")
     ap.add_argument("--j3", type=float, default=None, help="elbow swing deg (default -35)")
     ap.add_argument("--j5", type=float, default=None, help="wrist swing deg (default +45)")
