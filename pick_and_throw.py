@@ -94,7 +94,7 @@ def main():
     ap.add_argument("--scale", type=float, default=1.0)
     ap.add_argument("--no-release", action="store_true")
     ap.add_argument("--release-delay", type=float, default=None,
-                    help="seconds after the swing starts to open the gripper; try 0.0 / 0.05 / 0.1")
+                    help="seconds after the swing starts to open the gripper; negative = open before the swing; try -0.3 / -0.2 / -0.1")
     ap.add_argument("--go", action="store_true")
     ap.add_argument("--i-checked-with-staff", action="store_true")
     asyncio.run(run(ap.parse_args()))
