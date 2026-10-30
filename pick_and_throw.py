@@ -51,6 +51,17 @@ async def run(args):
         await release_if_holding(robot, motion, go)
         await move_to(motion, HOME, go, "home")
 
+        yaw = args.yaw
+        if args.aim_cup:
+            from main import scan_for_cup
+            print("0) find cup (to aim the lob)")
+            cup = await scan_for_cup(motion, robot, go)
+            if cup is None:
+                print("no cup found - not throwing")
+                return
+            yaw = throw.yaw_for_cup(cup[0], cup[1])
+            await move_to(motion, HOME, go, "home")
+
         print("1) find ball")
         ball = await find_ball(robot, motion, go)
         if ball is None:
@@ -68,7 +79,7 @@ async def run(args):
             await move_to(motion, HOME, go, "home")
             info = await throw.throw(robot, args.distance, go, args.scale, not args.no_release,
                                      args.release_delay, throw.swing_from_args(args), args.speed, args.accel, args.wind_z,
-                                     throw.LOB_START_J if args.lob else None)
+                                     throw.LOB_START_J if args.lob else None, yaw)
         except BaseException as e:  # error or Ctrl+C: don't leave the ball in the gripper
             print(f"!! stopped ({type(e).__name__}: {e}); putting the ball back")
             await asyncio.sleep(2.0)  # after a controller stop the arm refuses commands for a moment
@@ -98,6 +109,9 @@ def main():
     ap.add_argument("--accel", type=float, default=None, help="swing accel deg/s2 (default 900, max 1145)")
     ap.add_argument("--wind-z", type=float, default=None, help="wind-up height mm (default 450; try 650 for a lob)")
     ap.add_argument("--lob", action="store_true", help="near-vertical full-speed toss (cup ~50 cm from the base)")
+    ap.add_argument("--yaw", type=float, default=0.0, help="turn the lob toward +y by this many deg (--lob only)")
+    ap.add_argument("--aim-cup", action="store_true",
+                    help="scan for the cup first and turn the lob toward it (--lob only)")
     ap.add_argument("--j2", type=float, default=None, help="shoulder swing deg (negative = forward+down)")
     ap.add_argument("--j3", type=float, default=None, help="elbow swing deg (default -35)")
     ap.add_argument("--j5", type=float, default=None, help="wrist swing deg (default +45)")

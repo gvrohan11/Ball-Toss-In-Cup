@@ -134,3 +134,20 @@ def test_lob_default_speed_is_below_the_controller_limit(monkeypatch):
     assert throw.LOB_SPEED_DPS <= 130
     out = asyncio.run(throw.throw(object(), 500, False, swing_deg=throw.LOB_SWING, start_j=throw.LOB_START_J))
     assert out["dry_run"] is True
+
+
+def test_yaw_for_cup_points_at_cup(capsys):
+    assert abs(throw.yaw_for_cup(480, 0)) < 1e-9
+    assert abs(throw.yaw_for_cup(480, 480) - 45) < 1e-6
+    assert throw.yaw_for_cup(480, -85) < 0
+
+
+def test_yaw_needs_lob_and_is_limited(monkeypatch):
+    for cls in (throw.MotionClient, throw.Arm, throw.Gripper):
+        monkeypatch.setattr(cls, "from_robot", staticmethod(lambda r, n: object()))
+    with pytest.raises(ValueError):
+        asyncio.run(throw.throw(object(), 500, False, yaw_deg=10))
+    with pytest.raises(ValueError):
+        asyncio.run(throw.throw(object(), 500, False, swing_deg=throw.LOB_SWING, start_j=throw.LOB_START_J, yaw_deg=60))
+    out = asyncio.run(throw.throw(object(), 500, False, swing_deg=throw.LOB_SWING, start_j=throw.LOB_START_J, yaw_deg=12))
+    assert out["dry_run"] is True
