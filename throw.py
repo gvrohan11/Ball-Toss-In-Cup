@@ -298,6 +298,10 @@ def far_params(distance_mm, speed=None, accel=None, release_delay_s=None, preset
     speed = speed or far_speed_for(distance_mm, preset)
     accel = accel or FAR_ACCEL
     delay = far_release_delay(speed, accel, preset) if release_delay_s is None else release_delay_s
+    if preset == "far" and release_delay_s is None:
+        # live (Oct 29 19:34): opening before the swing dropped the ball - at the FAR start the fingers point
+        # forward, so the ball only stays in once the swing is pushing it into the palm.
+        delay = max(delay, 0.10)
     print(f"   {preset.upper()}: cup {distance_mm:.0f} mm -> {speed:.0f} deg/s, open at {delay:+.2f} s, "
           f"gripper speed {FAR_GRIPPER_SPEED}")
     return dict(speed_dps=speed, accel_dps2=accel, release_delay_s=delay, swing_deg=dict(p["swing"]),
