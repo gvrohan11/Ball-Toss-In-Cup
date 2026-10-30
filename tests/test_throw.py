@@ -1,6 +1,7 @@
 import asyncio
 import os
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -87,3 +88,14 @@ def test_negative_delay_opens_before_swing(monkeypatch):
     monkeypatch.setattr(throw.Gripper, "from_robot", staticmethod(lambda r, n: G()))
     out = asyncio.run(throw.throw(object(), 1100, True, scale=1.0, release=True, release_delay_s=-0.05))
     assert order == ["open", "swing"] and out["released"] is True
+
+
+def test_swing_overrides_and_limits(monkeypatch):
+    a = SimpleNamespace(j2=-20.0, j3=None, j5=50.0)
+    assert throw.swing_from_args(a) == {1: -20.0, 2: -35, 4: 50.0}
+    for cls in (throw.MotionClient, throw.Arm, throw.Gripper):
+        monkeypatch.setattr(cls, "from_robot", staticmethod(lambda r, n: object()))
+    out = asyncio.run(throw.throw(object(), 1100, False, swing_deg={1: -20, 2: -35, 4: 45}, speed_dps=180, accel_dps2=1100))
+    assert out["dry_run"] is True
+    with pytest.raises(ValueError):
+        asyncio.run(throw.throw(object(), 1100, False, speed_dps=400))
