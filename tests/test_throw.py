@@ -107,3 +107,21 @@ def test_wind_z_validated(monkeypatch):
     with pytest.raises(ValueError):
         asyncio.run(throw.throw(object(), 1100, False, wind_z=1500))
     assert asyncio.run(throw.throw(object(), 1100, False, wind_z=650))["dry_run"] is True
+
+
+def test_lob_swing_is_inside_limits_and_goes_up():
+    start = [0.0, throw.LOB_START_J[0], throw.LOB_START_J[1], 0.0, throw.LOB_START_J[2], 0.0]
+    end = list(start)
+    for j, d in throw.LOB_SWING.items():
+        end[j] += d
+    throw.check_limits(start, end)
+    assert end[1] > start[1] and end[2] < start[2]      # shoulder back/up, elbow up
+
+
+def test_lob_dry_run(monkeypatch):
+    for cls in (throw.MotionClient, throw.Arm, throw.Gripper):
+        monkeypatch.setattr(cls, "from_robot", staticmethod(lambda r, n: object()))
+    out = asyncio.run(throw.throw(object(), 500, False, swing_deg=throw.LOB_SWING, start_j=throw.LOB_START_J))
+    assert out["dry_run"] is True
+    a = SimpleNamespace(j2=None, j3=None, j5=None, lob=True)
+    assert throw.swing_from_args(a) == throw.LOB_SWING

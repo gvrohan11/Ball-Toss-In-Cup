@@ -49,7 +49,7 @@ def rig(monkeypatch):
 
 
 def args(**kw):
-    d = dict(distance=1100.0, scale=1.0, no_release=False, release_delay=None, speed=None, accel=None, j2=None, j3=None, j5=None, wind_z=None, go=True, i_checked_with_staff=True)
+    d = dict(distance=1100.0, scale=1.0, no_release=False, release_delay=None, speed=None, accel=None, j2=None, j3=None, j5=None, wind_z=None, lob=False, go=True, i_checked_with_staff=True)
     d.update(kw)
     return SimpleNamespace(**d)
 
@@ -61,7 +61,7 @@ def test_throws_only_after_a_good_pick(rig, monkeypatch):
     async def pick(robot, ball, go):
         return True
 
-    async def throw(robot, d, go, scale, release, delay=None, swing=None, speed=None, accel=None, wind_z=None):
+    async def throw(robot, d, go, scale, release, delay=None, swing=None, speed=None, accel=None, wind_z=None, start_j=None):
         thrown.append((d, go))
         return {"distance_mm": d}
 
@@ -113,7 +113,7 @@ def test_refuses_live_without_staff_flag(rig, monkeypatch):
         seen.append(go)
         return None
 
-    async def throw(robot, d, go, scale, release, delay=None, swing=None, speed=None, accel=None, wind_z=None):
+    async def throw(robot, d, go, scale, release, delay=None, swing=None, speed=None, accel=None, wind_z=None, start_j=None):
         seen.append(("throw", go))
         return {}
 
