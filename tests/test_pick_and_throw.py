@@ -49,7 +49,7 @@ def rig(monkeypatch):
 
 
 def args(**kw):
-    d = dict(distance=1100.0, scale=1.0, no_release=False, release_delay=None, go=True, i_checked_with_staff=True)
+    d = dict(distance=1100.0, scale=1.0, no_release=False, release_delay=None, speed=None, accel=None, j2=None, j3=None, j5=None, go=True, i_checked_with_staff=True)
     d.update(kw)
     return SimpleNamespace(**d)
 
@@ -61,7 +61,7 @@ def test_throws_only_after_a_good_pick(rig, monkeypatch):
     async def pick(robot, ball, go):
         return True
 
-    async def throw(robot, d, go, scale, release, delay=None):
+    async def throw(robot, d, go, scale, release, delay=None, swing=None, speed=None, accel=None):
         thrown.append((d, go))
         return {"distance_mm": d}
 
@@ -113,7 +113,7 @@ def test_refuses_live_without_staff_flag(rig, monkeypatch):
         seen.append(go)
         return None
 
-    async def throw(robot, d, go, scale, release, delay=None):
+    async def throw(robot, d, go, scale, release, delay=None, swing=None, speed=None, accel=None):
         seen.append(("throw", go))
         return {}
 
@@ -132,3 +132,11 @@ def test_throw_doc_with_int_keys_is_stored(monkeypatch):
     doc = logger.log_attempt({"phase": "throw", "throw": {"swing_deg": {2: -35, 4: 45}}})
     assert doc["throw"]["swing_deg"] == {"2": -35, "4": 45}
     assert logger._collection.count_documents({"phase": "throw"}) == 1
+
+
+def test_landing_answer_accepts_units(monkeypatch):
+    for typed, want in (("10", 10.0), ("-10", -10.0), ("10cms", 10.0), ("short -25 cm", -25.0)):
+        monkeypatch.setattr("builtins.input", lambda prompt="", typed=typed: typed)
+        assert pt.ask_landing()["long_cm"] == want
+    monkeypatch.setattr("builtins.input", lambda prompt="": "in")
+    assert pt.ask_landing() == {"hit": True}

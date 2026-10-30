@@ -33,10 +33,9 @@ def ask_landing():
         return None
     if s in ("in", "y", "yes"):
         return {"hit": True}
-    try:
-        return {"hit": False, "long_cm": float(s)}
-    except ValueError:
-        return None
+    import re
+    m = re.search(r"-?\d+(?:\.\d+)?", s)   # accepts "10", "-10", "10cm", "10cms"
+    return {"hit": False, "long_cm": float(m.group())} if m else None
 
 
 async def run(args):
@@ -68,7 +67,7 @@ async def run(args):
             print("3) throw")
             await move_to(motion, HOME, go, "home")
             info = await throw.throw(robot, args.distance, go, args.scale, not args.no_release,
-                                     args.release_delay)
+                                     args.release_delay, throw.swing_from_args(args), args.speed, args.accel)
         except BaseException as e:  # error or Ctrl+C: don't leave the ball in the gripper
             print(f"!! stopped ({type(e).__name__}: {e}); putting the ball back")
             await put_ball_back(robot, motion, ball, go)
@@ -93,6 +92,11 @@ def main():
     ap.add_argument("--distance", type=float, required=True, help="cup distance from base, mm")
     ap.add_argument("--scale", type=float, default=1.0)
     ap.add_argument("--no-release", action="store_true")
+    ap.add_argument("--speed", type=float, default=None, help="swing speed deg/s (default 150, max 180)")
+    ap.add_argument("--accel", type=float, default=None, help="swing accel deg/s2 (default 900, max 1145)")
+    ap.add_argument("--j2", type=float, default=None, help="shoulder swing deg (negative = forward+down)")
+    ap.add_argument("--j3", type=float, default=None, help="elbow swing deg (default -35)")
+    ap.add_argument("--j5", type=float, default=None, help="wrist swing deg (default +45)")
     ap.add_argument("--release-delay", type=float, default=None,
                     help="seconds after the swing starts to open the gripper; negative = open before the swing; try -0.3 / -0.2 / -0.1")
     ap.add_argument("--go", action="store_true")
