@@ -68,6 +68,21 @@ def release_delay(distance_mm):
     return pts[-1][1]
 
 
+async def _go_home(motion, tries=3):
+    """The move home right after a fast swing was cancelled once by the robot's session manager
+    (Oct 29, "context canceled"); the swing itself had finished. Moving home is safe to repeat."""
+    for i in range(tries):
+        try:
+            ok = await motion.move(GRIPPER, PoseInFrame(reference_frame="world", pose=Pose(**HOME)))
+            if ok is not False:
+                return True
+        except Exception as e:  # noqa: BLE001
+            print(f"  home move failed ({type(e).__name__}: {str(e)[:80]}), try {i + 1}/{tries}")
+        await asyncio.sleep(1.0)
+    print("!! arm is NOT home: run `python main.py` (dry run does not move it) or move it by hand/Viam app")
+    return False
+
+
 async def throw(robot, distance_mm, go, scale=1.0, release=True):
     """scale (0.1..1) shrinks the swing angles AND the speed: use 0.2-0.3 first, empty gripper,
     release=False, to watch the motion before any real throw."""
@@ -102,7 +117,7 @@ async def throw(robot, distance_mm, go, scale=1.0, release=True):
     finally:
         await arm.do_command({"set_speed": NORMAL_SPEED})
         print("3) speed restored")
-    await motion.move(GRIPPER, PoseInFrame(reference_frame="world", pose=Pose(**HOME)))
+    await _go_home(motion)
     return {"distance_mm": distance_mm, "release_delay_s": delay,
             "throw_speed": speed, "swing_deg": SWING_DEG, "scale": scale, "released": release}
 
