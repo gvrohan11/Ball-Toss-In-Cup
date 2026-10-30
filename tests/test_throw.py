@@ -76,7 +76,7 @@ def test_negative_delay_opens_before_swing(monkeypatch):
         async def do_command(self, c):
             return {}
 
-        async def move_to_joint_positions(self, j):
+        async def move_to_joint_positions(self, j, extra=None):
             order.append("swing")
 
     class M:

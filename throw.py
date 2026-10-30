@@ -106,7 +106,7 @@ async def _go_home(motion, tries=3):
 
 async def throw(robot, distance_mm, go, scale=1.0, release=True, release_delay_s=None,
                 swing_deg=None, speed_dps=None, accel_dps2=None, wind_z=None, start_j=None, yaw_deg=0.0,
-                gripper_speed=None):
+                gripper_speed=None, direct=False):
     """scale (0.1..1) shrinks the swing angles AND the speed: use 0.2-0.3 first, empty gripper,
     release=False, to watch the motion before any real throw."""
     if not 0.1 <= scale <= 1.0:
@@ -139,7 +139,9 @@ async def throw(robot, distance_mm, go, scale=1.0, release=True, release_delay_s
             target = [cur[0] + yaw_deg, start_j[0], start_j[1], cur[3], start_j[2], cur[5]]
             check_limits(cur, target)
             await arm.do_command({"set_speed": NORMAL_SPEED})
-            await arm.move_to_joint_positions(JointPositions(values=target))
+            await arm.move_to_joint_positions(
+                JointPositions(values=target),
+                extra={"direct": True, "speed_d": NORMAL_SPEED, "acceleration_d": 300.0} if direct else None)
     else:
         print(f"1) wind up (planned move) to {wind}")
         if go:
@@ -171,6 +173,10 @@ async def throw(robot, distance_mm, go, scale=1.0, release=True, release_delay_s
                 prev_gs = None
             await gripper.do_command({"set_gripper_speed": gripper_speed})
         await arm.do_command({"set_speed": speed, "set_acceleration": accel})
+        # direct=True: the module sends ONE point-to-point command (xArm motion mode 0, planned by UFactory's
+        # firmware) instead of streaming 100 servo setpoints/s (mode 1). The "Linear speed exceeds limit in
+        # ServoJ mode" stop belongs to mode 1, and with no stream on the bus the gripper commands don't queue.
+        swing_extra = {"direct": True, "speed_d": float(speed), "acceleration_d": float(accel)} if direct else None
         t0 = time.monotonic()
         t_open_call = t_open_done = None
         open_task = None
@@ -187,10 +193,10 @@ async def throw(robot, distance_mm, go, scale=1.0, release=True, release_delay_s
             open_task = asyncio.create_task(open_gripper())
             await asyncio.sleep(-delay)
             t0_swing = time.monotonic()
-            swing = asyncio.create_task(arm.move_to_joint_positions(JointPositions(values=end)))
+            swing = asyncio.create_task(arm.move_to_joint_positions(JointPositions(values=end), extra=swing_extra))
         else:
             t0_swing = time.monotonic()
-            swing = asyncio.create_task(arm.move_to_joint_positions(JointPositions(values=end)))
+            swing = asyncio.create_task(arm.move_to_joint_positions(JointPositions(values=end), extra=swing_extra))
             if release:
                 await asyncio.sleep(delay)
                 open_task = asyncio.create_task(open_gripper())
@@ -365,6 +371,8 @@ async def _main():
                     help="underhand pitch: long 109-deg backswing at full speed, steep 63-deg launch (cup ~79-93 cm)")
     ap.add_argument("--whip", action="store_true",
                     help="wrist-whip throw, ~2x faster, 42-53 deg up (cup ~85-115 cm; speed from --distance)")
+    ap.add_argument("--direct", action="store_true",
+                    help="point-to-point mode (UFactory firmware plans the move): no ServoJ speed stop, steadier release")
     ap.add_argument("--yaw", type=float, default=0.0, help="turn the lob toward +y by this many deg (--lob only)")
     ap.add_argument("--lob", action="store_true",
                     help="near-vertical full-speed toss (cup ~50 cm from the base); see LOB_* in this file")
@@ -381,11 +389,11 @@ async def _main():
                             "pitch" if a.pitch else ("whip" if a.whip else "far"))
             print(await throw(robot, a.distance, go, a.scale, not a.no_release, fp["release_delay_s"],
                               fp["swing_deg"], fp["speed_dps"], fp["accel_dps2"], None, fp["start_j"], a.yaw,
-                              fp["gripper_speed"]))
+                              fp["gripper_speed"], a.direct))
         else:
             print(await throw(robot, a.distance, go, a.scale, not a.no_release, a.release_delay,
                               swing_from_args(a), a.speed, a.accel, a.wind_z,
-                              LOB_START_J if a.lob else None, a.yaw))
+                              LOB_START_J if a.lob else None, a.yaw, None, a.direct))
     finally:
         await robot.close()
 
