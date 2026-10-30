@@ -107,6 +107,9 @@ goal is Phase 2: **throw** the ball into a cup out of drop reach.
   balls are split by repeated edge fits (Hough as fallback) and must be ≥ 70% covered; YOLO (COCO "orange" —
   that's how it labels the ping-pong ball) confirms each ball and adds ones color missed
   (outline circle fit). `pick_ball.closeup`: 0.5 s settle, median of 3 close-up readings.
+  No ball at the look pose → `pick_ball.search_table`: extra straight-down views
+  (`SEARCH_VIEWS`) over the table up to `CUP_MARGIN_MM` (15 cm) short of the nearest cup,
+  before "no ball found". Balls past that line or within 9 cm of a cup are never picked.
 - `scripts/debug_ball.py`: read-only debugger (replay logged frames, or `live`): mask,
   blobs, fits, YOLO boxes, bulge, sharpness, and where the gripper would grab.
 - `scripts/compare_ball_detection.py [--panels]`: old (frozen Hough-only) vs new detector on every

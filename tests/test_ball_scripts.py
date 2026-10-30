@@ -117,3 +117,44 @@ def test_compare_script_reports_old_vs_new(tmp_path, monkeypatch, capsys):
     assert "SUMMARY over 1 frames" in out and "new 1/1" in out
     line = next(l for l in out.splitlines() if l.startswith("20261030-100000#2"))
     assert line.split()[3] == "2"                                   # new column: both balls
+
+
+scan_table = _load("scan_table")
+
+
+def test_scan_visits_every_view_lists_every_ball_and_never_picks(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(detection_log, "ROOT", tmp_path)
+    monkeypatch.setattr(pick_ball, "AVOID_XY", [(880.0, 205.0)])       # one cup ~90 cm out
+    monkeypatch.setattr(pick_ball, "LOOK_SETTLE_S", 0)
+    moves = []
+
+    async def move(motion, x, y, z, go):
+        moves.append((x, y, z))
+
+    seen_from = {pick_ball.LOOK: [{"xy": (452.0, 51.0), "why": None}],
+                 pick_ball.TOP_VIEW: [{"xy": (455.0, 49.0), "why": None},          # same ball, from above
+                                      {"xy": (880.0, 205.0), "why": "in or next to a cup"},
+                                      {"xy": (300.0, -420.0), "why": None}]}       # only the top sees it
+
+    async def balls_in_view(robot):
+        return seen_from.get(moves[-1], [])
+
+    async def no_pick(*a, **k):
+        raise AssertionError("scan_table must never pick")
+
+    monkeypatch.setattr(pick_ball, "move", move)
+    monkeypatch.setattr(pick_ball, "balls_in_view", balls_in_view)
+    monkeypatch.setattr(pick_ball, "pick", no_pick)
+    balls = asyncio.run(scan_table.scan(object(), object(), True))
+    assert moves[0] == pick_ball.LOOK and moves[1] == pick_ball.TOP_VIEW
+    assert len(moves) == 1 + len(pick_ball.search_views())                # every view visited
+    assert len(balls) == 3                                                 # the double sighting merged
+    pickable = scan_table.report(balls, pick_ball.search_max_r())
+    assert len(pickable) == 2
+    out = capsys.readouterr().out
+    assert "-> in or next to a cup" in out and "TABLE: 2 ball(s) the robot would pick" in out
+
+
+def test_scan_report_table_clear(capsys):
+    scan_table.report([{"xy": (880.0, 205.0), "why": "in or next to a cup", "views": [2]}], 740)
+    assert "TABLE CLEAR" in capsys.readouterr().out

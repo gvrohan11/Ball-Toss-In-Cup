@@ -121,7 +121,7 @@ def test_ball_candidates_and_choice_are_logged(log, fake_view, monkeypatch):
 def test_ball_in_a_cup_is_never_picked(log, fake_view, monkeypatch):
     """--fill-cups: a ball already dropped in a cup can be in view; pick the free one."""
     import ball_finder
-    balls = [dict(u=600, v=300, r=30, touching=False), dict(u=900, v=300, r=30, touching=False)]
+    balls = [dict(u=600, v=300, r=30, touching=False), dict(u=300, v=300, r=30, touching=False)]
     monkeypatch.setattr(ball_finder, "find_balls", lambda frame, r: balls)
     monkeypatch.setattr(pick_ball, "BALL_COLOR", "orange")
     monkeypatch.setattr(pick_ball, "AVOID_XY", [(610.0, 290.0)])     # a surveyed cup at the 1st ball
@@ -136,9 +136,31 @@ def test_ball_in_a_cup_is_never_picked(log, fake_view, monkeypatch):
 
     monkeypatch.setattr(pick_ball, "_frame", frame)
     pos = asyncio.run(pick_ball.locate_ball(Robot()))
-    assert pos[:2] == (900.0, 300.0)
+    assert pos[:2] == (300.0, 300.0)
     in_cup, free = lines(log)[0]["items"]
     assert in_cup["why"] == "in or next to a cup" and free["chosen"]
+
+
+def test_ball_past_the_search_line_is_not_picked(log, fake_view, monkeypatch):
+    """Cups ~92 cm out: balls farther than 77 cm (15 cm short of the nearest cup) are left."""
+    import ball_finder
+    balls = [dict(u=800, v=250, r=30, touching=False), dict(u=420, v=20, r=30, touching=False)]   # 84 / 42 cm
+    monkeypatch.setattr(ball_finder, "find_balls", lambda frame, r: balls)
+    monkeypatch.setattr(pick_ball, "BALL_COLOR", "orange")
+    monkeypatch.setattr(pick_ball, "AVOID_XY", [(915.0, 70.0), (914.0, -85.0)])
+    monkeypatch.setattr(pick_ball.Camera, "from_robot", staticmethod(lambda r, n: FakeCam()))
+
+    async def frame(cam):
+        return fake_view
+
+    class Robot:
+        async def transform_pose(self, p, dest):
+            return SimpleNamespace(pose=SimpleNamespace(x=0, y=0, z=400))
+
+    monkeypatch.setattr(pick_ball, "_frame", frame)
+    assert asyncio.run(pick_ball.locate_ball(Robot()))[:2] == (420.0, 20.0)
+    far, near = lines(log)[0]["items"]
+    assert far["why"] == "past the search line (too near the cups)" and near["chosen"]
 
 
 def test_events_and_summary(log):
