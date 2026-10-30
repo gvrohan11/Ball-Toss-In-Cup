@@ -99,3 +99,11 @@ def test_swing_overrides_and_limits(monkeypatch):
     assert out["dry_run"] is True
     with pytest.raises(ValueError):
         asyncio.run(throw.throw(object(), 1100, False, speed_dps=400))
+
+
+def test_wind_z_validated(monkeypatch):
+    for cls in (throw.MotionClient, throw.Arm, throw.Gripper):
+        monkeypatch.setattr(cls, "from_robot", staticmethod(lambda r, n: object()))
+    with pytest.raises(ValueError):
+        asyncio.run(throw.throw(object(), 1100, False, wind_z=1500))
+    assert asyncio.run(throw.throw(object(), 1100, False, wind_z=650))["dry_run"] is True
