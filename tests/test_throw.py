@@ -196,3 +196,14 @@ def test_pitch_inside_limits():
     throw.check_limits(start, end)
     assert 160 < throw.far_speed_for(892, "pitch") <= 180
     assert throw.far_release_delay(170, preset="pitch") > 0.1
+
+
+def test_power_preset_is_direct_and_inside_limits():
+    start = [0.0, throw.POWER_START_J[0], throw.POWER_START_J[1], 0.0, throw.POWER_START_J[2], 0.0]
+    end = list(start)
+    for j, d in throw.POWER_SWING.items():
+        end[j] += d
+    throw.check_limits(start, end)
+    fp = throw.far_params(955, preset="power")
+    assert fp["direct"] is True and 60 < fp["speed_dps"] < 80
+    assert throw.far_params(955, preset="whip")["direct"] is False
