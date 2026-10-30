@@ -122,3 +122,13 @@ def test_refuses_live_without_staff_flag(rig, monkeypatch):
     asyncio.run(pt.run(args(i_checked_with_staff=False)))
     assert seen == [None, ("throw", False)] or all(x in (None, False, ("throw", False)) for x in seen)
     assert m.moves == []                      # dry run: nothing moved
+
+
+def test_throw_doc_with_int_keys_is_stored(monkeypatch):
+    """Live 17:54: swing_deg {2: -35, 4: 45} made Atlas reject the throw doc ("only string keys")."""
+    import logger
+    import mongomock
+    monkeypatch.setattr(logger, "_collection", mongomock.MongoClient()["balltoss"]["attempts"])
+    doc = logger.log_attempt({"phase": "throw", "throw": {"swing_deg": {2: -35, 4: 45}}})
+    assert doc["throw"]["swing_deg"] == {"2": -35, "4": 45}
+    assert logger._collection.count_documents({"phase": "throw"}) == 1

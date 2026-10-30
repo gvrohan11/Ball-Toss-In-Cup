@@ -50,9 +50,9 @@ def _get_collection():
 
 
 def _jsonable(v):
-    """Tuples -> lists, numpy floats -> float, so pymongo can store them."""
+    """Tuples -> lists, numpy floats -> float, int keys -> str, so pymongo can store them."""
     if isinstance(v, dict):
-        return {k: _jsonable(x) for k, x in v.items()}
+        return {str(k): _jsonable(x) for k, x in v.items()}
     if isinstance(v, (list, tuple)):
         return [_jsonable(x) for x in v]
     if hasattr(v, "item"):
