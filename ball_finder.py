@@ -31,7 +31,8 @@ def find_balls(bgr, expected_r):
     """Circles of radius ~expected_r (pixels) in the orange mask."""
     m = orange_mask(bgr)
     h, w = m.shape
-    r_lo, r_hi = int(expected_r * 0.8), int(expected_r * 1.25) + 1
+    # 1.4: one of the Oct 30 balls measured 1.19x in the wide view and tipped over 1.25 up close
+    r_lo, r_hi = int(expected_r * 0.8), int(expected_r * 1.4) + 1
     blur = cv2.GaussianBlur(m, (9, 9), 2)
     circles = cv2.HoughCircles(blur, cv2.HOUGH_GRADIENT, dp=1.2, minDist=expected_r * 1.5,
                                param1=100, param2=max(10, int(expected_r * 0.5)),
