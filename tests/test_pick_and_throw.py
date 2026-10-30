@@ -246,3 +246,11 @@ def test_survey_only_never_picks_or_throws(rig, monkeypatch):
     monkeypatch.setattr(pt, "find_ball", find)
     asyncio.run(pt.run(args(survey_only=True, cradle=True, distance=None)))
     assert plans == []
+
+
+def test_no_release_run_never_asks_or_logs(rig, monkeypatch):
+    fake_survey(monkeypatch, [(980.0, 0.0, 100.0)])
+    plans, logged = recorder(monkeypatch, [])
+    monkeypatch.setattr(pt, "ask_landing", lambda: (_ for _ in ()).throw(AssertionError("asked")))
+    asyncio.run(pt.run(args(aim_cup=True, cradle=True, no_release=True, distance=None)))
+    assert len(plans) == 1 and logged == []

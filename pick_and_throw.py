@@ -128,6 +128,9 @@ async def throw_at(robot, motion, args, go, pl, cup, t0):
         return {"check_only": True}
     if not go:
         return {"dry_run": True}
+    if args.no_release:
+        print("no-release run: the ball is still in the gripper (the next run sets it down first); not logged")
+        return {"no_release": True}
     landing = ask_landing() or {"hit": None, "outcome": "not_recorded"}
     cup_doc = None
     if cup is not None:
@@ -168,7 +171,7 @@ async def fill_cups(robot, motion, args, go, cups, ratio):
                 break
             continue
         pick_fails, throws = 0, throws + 1
-        if not go or res.get("check_only"):
+        if not go or res.get("check_only") or res.get("no_release"):
             break                                            # dry run / check: one pass is enough
         if res.get("hit"):
             n = res.get("cup_number", cup["number"])
