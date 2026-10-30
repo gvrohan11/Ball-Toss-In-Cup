@@ -65,7 +65,7 @@ async def run(args):
             cup_dist = math.hypot(cup[0], cup[1])
             if preset:
                 lo, hi = throw.PRESETS[preset]["table"][0][1] - 60, throw.PRESETS[preset]["table"][-1][1] + 40
-                if not lo <= cup_dist <= hi and not getattr(args, "force_aim", False):
+                if not lo <= cup_dist <= hi and not getattr(args, "force_aim", False) and args.speed is None:
                     print(f"cup is {cup_dist:.0f} mm from the base; --{preset} reaches {lo}-{hi} mm. Move the cup, "
                           "or use --force-aim.")
                     await move_to(motion, HOME, go, "home")
