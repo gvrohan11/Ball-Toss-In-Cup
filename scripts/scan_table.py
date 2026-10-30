@@ -8,9 +8,11 @@
 Visits the same views the picker uses (pick_ball.LOOK, then pick_ball.SEARCH_VIEWS: the top
 view first), finds EVERY orange ball in each, merges balls seen from several views, and prints:
 
-    ball 1: (452, +51)  45 cm out, seen in 3 view(s)  -> would be picked
-    ball 2: (880, +205) 90 cm out, seen in 1 view(s)  -> in or next to a cup
+    ball 1: (452, +51)  45 cm out, seen in 3 view(s) (spread 9 mm)  -> would be picked
+    ball 2: (880, +205) 90 cm out, seen in 1 view(s) (spread 0 mm)  -> in or next to a cup
     TABLE: 1 ball(s) the robot would pick
+
+and saves the ball map (world x, y, status, views) to observations/ball_map/latest.json.
 
 or "TABLE CLEAR: no ball the robot would pick". Every frame is saved in the detection log
 (python detection_log.py; python scripts/debug_ball.py <folder> for how each ball was found).
@@ -24,38 +26,75 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-SAME_BALL_MM = 30     # sightings from different views this close are one ball
+SAME_BALL_MM = 35     # sightings from different views this close are one ball: across views a
+                      # ball's position spreads up to ~26 mm; two balls are >= 40 mm apart
 
 
 def merge(sightings):
-    """[(view, {"xy", "why"})] -> [{"xy", "why", "views"}], nearest the base first."""
+    """[(view, {"xy", "why", "touching"})] -> distinct balls, nearest the base first:
+    [{"xy": mean world (x, y), "views": [...], "spread_mm", "touching", "why"}].
+    Two sightings from the SAME view are always different balls. The status comes from the
+    merged position (pick_ball.skip_reason), and "touching" only if most views say so; a
+    single view on the edge of a rule no longer decides it."""
+    import pick_ball as pb
     balls = []
     for view, s in sightings:
-        b = next((b for b in balls if math.dist(b["xy"], s["xy"]) <= SAME_BALL_MM), None)
+        free = [b for b in balls if view not in b["views"]
+                and math.dist(b["xy"], s["xy"]) <= SAME_BALL_MM]
+        b = min(free, key=lambda b: math.dist(b["xy"], s["xy"]), default=None)
         if b is None:
-            balls.append({"xy": s["xy"], "why": s["why"], "views": [view], "_pts": [s["xy"]]})
-            continue
-        b["_pts"].append(s["xy"])
-        b["xy"] = tuple(sum(v) / len(b["_pts"]) for v in zip(*b["_pts"]))
+            b = {"views": [], "_pts": [], "_touch": []}
+            balls.append(b)
         b["views"].append(view)
-        b["why"] = b["why"] or s["why"]           # any view that rejects it (e.g. touching) wins
+        b["_pts"].append(s["xy"])
+        b["_touch"].append(bool(s.get("touching")))
+        b["xy"] = tuple(sum(v) / len(b["_pts"]) for v in zip(*b["_pts"]))
     for b in balls:
-        del b["_pts"]
+        pts = b.pop("_pts")
+        touch = b.pop("_touch")
+        b["spread_mm"] = round(max(math.dist(p, b["xy"]) for p in pts), 1)
+        b["touching"] = sum(touch) * 2 > len(touch)
+        b["why"] = "touching another ball" if b["touching"] else pb.skip_reason(b["xy"])
     return sorted(balls, key=lambda b: math.hypot(*b["xy"]))
 
 
 def report(balls, limit):
-    print(f"\nBALLS ON THE TABLE (search line: {limit / 10:.0f} cm from the base)")
+    print(f"\nBALLS ON THE TABLE: {len(balls)} distinct (search line: {limit / 10:.0f} cm from the base)")
     for n, b in enumerate(balls, 1):
         x, y = b["xy"]
-        print(f"  ball {n}: ({x:.0f}, {y:+.0f})  {math.hypot(x, y) / 10:.0f} cm out, "
-              f"seen in {len(set(b['views']))} view(s)  -> {b['why'] or 'would be picked'}")
+        print(f"  ball {n}: ({x:.0f}, {y:+.0f})  {math.hypot(x, y) / 10:.0f} cm out, seen in "
+              f"{len(b['views'])} view(s) (spread {b.get('spread_mm', 0):.0f} mm)  -> {b['why'] or 'would be picked'}")
     pickable = [b for b in balls if not b["why"]]
     if pickable:
         print(f"TABLE: {len(pickable)} ball(s) the robot would pick")
     else:
         print("TABLE CLEAR: no ball the robot would pick")
     return pickable
+
+
+MAP_DIR = ROOT / "observations" / "ball_map"
+
+
+def save_map(balls, limit, folder=None):
+    """Write the ball map (world frame) to observations/ball_map/<time>.json + latest.json,
+    and into the scan's detection-log folder. Returns the path."""
+    import json
+    from datetime import datetime
+    doc = {"time": datetime.now().isoformat(timespec="seconds"), "frame": "world", "units": "mm",
+           "search_line_mm": round(limit), "count": len(balls),
+           "pickable": sum(1 for b in balls if not b["why"]),
+           "balls": [{"n": n, "x": round(b["xy"][0], 1), "y": round(b["xy"][1], 1),
+                      "dist_mm": round(math.hypot(*b["xy"])), "status": b["why"] or "pickable",
+                      "views": b["views"], "spread_mm": b.get("spread_mm")}
+                     for n, b in enumerate(balls, 1)]}
+    MAP_DIR.mkdir(parents=True, exist_ok=True)
+    text = json.dumps(doc, indent=2) + "\n"
+    path = MAP_DIR / f"{datetime.now():%Y%m%d-%H%M%S}.json"
+    path.write_text(text)
+    (MAP_DIR / "latest.json").write_text(text)
+    if folder is not None:
+        (Path(folder) / "ball_map.json").write_text(text)
+    return path
 
 
 async def scan(robot, motion, go):
@@ -107,6 +146,8 @@ async def _main():
             await main.survey_cups(motion, robot, a.go)
         balls = await scan(robot, motion, a.go)
         report(balls, pb.search_max_r())
+        path = save_map(balls, pb.search_max_r(), log.dir if log else None)
+        print(f"ball map (world frame): {path}  (also observations/ball_map/latest.json)")
     finally:
         detection_log.stop()
         if a.go:

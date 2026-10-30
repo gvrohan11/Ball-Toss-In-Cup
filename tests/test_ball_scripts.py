@@ -158,3 +158,48 @@ def test_scan_visits_every_view_lists_every_ball_and_never_picks(monkeypatch, tm
 def test_scan_report_table_clear(capsys):
     scan_table.report([{"xy": (880.0, 205.0), "why": "in or next to a cup", "views": [2]}], 740)
     assert "TABLE CLEAR" in capsys.readouterr().out
+
+
+def test_merge_keeps_touching_pair_apart_and_joins_views(monkeypatch):
+    """Two touching balls 46 mm apart (same view) stay two balls; one ball seen from 3 views
+    up to 26 mm apart is one ball; status follows the merged position / majority."""
+    monkeypatch.setattr(pick_ball, "AVOID_XY", [])
+    s = [(1, {"xy": (457.0, 2.0), "why": "touching another ball", "touching": True}),
+         (1, {"xy": (500.0, -14.0), "why": "touching another ball", "touching": True}),
+         (2, {"xy": (448.0, -3.0), "why": "touching another ball", "touching": True}),
+         (2, {"xy": (489.0, -21.0), "why": "touching another ball", "touching": True}),
+         (1, {"xy": (633.0, 81.0), "why": None, "touching": False}),
+         (2, {"xy": (624.0, 75.0), "why": None, "touching": False}),
+         (3, {"xy": (646.0, 85.0), "why": None, "touching": False})]
+    balls = scan_table.merge(s)
+    assert len(balls) == 3
+    pair = [b for b in balls if b["touching"]]
+    assert len(pair) == 2 and all(b["why"] == "touching another ball" for b in pair)
+    single = next(b for b in balls if not b["touching"])
+    assert sorted(single["views"]) == [1, 2, 3] and single["why"] is None and single["spread_mm"] < 15
+
+
+def test_one_view_on_the_search_line_does_not_discard_a_ball(monkeypatch):
+    monkeypatch.setattr(pick_ball, "AVOID_XY", [(905.0, 0.0)])          # line at 75.5 cm
+    s = [(v, {"xy": xy, "why": None, "touching": False})
+         for v, xy in [(1, (745.0, -42.0)), (2, (762.0, -41.0)), (3, (752.0, -39.0))]]
+    (b,) = scan_table.merge(s)
+    assert b["why"] is None                                            # merged 75.3 cm: pickable
+
+
+def test_cut_off_ball_is_left_out():
+    assert pick_ball.cut_off({"u": 30, "v": 300, "r": 36}, 1280, 720)
+    assert not pick_ball.cut_off({"u": 600, "v": 300, "r": 36}, 1280, 720)
+
+
+def test_ball_map_is_saved_in_world_frame(tmp_path, monkeypatch):
+    import json
+    monkeypatch.setattr(scan_table, "MAP_DIR", tmp_path / "ball_map")
+    balls = [{"xy": (474.0, 81.0), "why": None, "views": [1, 2], "spread_mm": 12.0},
+             {"xy": (456.0, 1.0), "why": "touching another ball", "views": [1], "spread_mm": 0.0}]
+    path = scan_table.save_map(balls, 760, tmp_path)
+    doc = json.loads((tmp_path / "ball_map" / "latest.json").read_text())
+    assert path.exists() and (tmp_path / "ball_map.json").exists()
+    assert doc["frame"] == "world" and doc["count"] == 2 and doc["pickable"] == 1
+    assert doc["balls"][0] == {"n": 1, "x": 474.0, "y": 81.0, "dist_mm": 481, "status": "pickable",
+                               "views": [1, 2], "spread_mm": 12.0}

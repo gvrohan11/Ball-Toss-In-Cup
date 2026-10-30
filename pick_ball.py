@@ -370,9 +370,16 @@ def search_views():
             math.hypot(v[0] - CAM_OFFSET_XY[0], v[1] - CAM_OFFSET_XY[1]) <= limit]
 
 
+def cut_off(b, w, h, margin=0.9):
+    """The ball's circle runs past the frame edge (its fitted center is unreliable)."""
+    r = margin * b["r"]
+    return b["u"] - r < 0 or b["v"] - r < 0 or b["u"] + r > w or b["v"] + r > h
+
+
 async def balls_in_view(robot):
     """EVERY orange ball in the current view (not just the one the picker would take):
-    [{"xy": (x, y) world mm, "why": reason it would not be picked, or None}]. Read-only."""
+    [{"xy": (x, y) world mm, "why": reason it would not be picked or None, "touching": bool}].
+    Balls cut off at the frame edge are left out (logged as rejected). Read-only."""
     from ball_finder import find_balls
     from cup_aim import _pixel_to_table
 
@@ -387,14 +394,18 @@ async def balls_in_view(robot):
     balls = find_balls(frame, expected_r)
     items = _ball_items(balls, frame)
     out = []
+    h, w = frame.shape[:2]
     for i, b in enumerate(balls):
         hit = await _pixel_to_table(robot, k, b["u"], b["v"], BALL_CENTER_Z)
         if hit is None:
             continue
         xy = hit[0][:2]
+        if cut_off(b, w, h):          # its center is a guess; another view (the top) sees it whole
+            items[i].update(world_mm=hit[0], kept=False, why="cut off at the frame edge")
+            continue
         why = "touching another ball" if b["touching"] else skip_reason(xy)
         items[i].update(world_mm=hit[0], kept=why is None, **({"why": why} if why else {}))
-        out.append({"xy": xy, "why": why})
+        out.append({"xy": xy, "why": why, "touching": bool(b["touching"])})
     detection_log.record("ball_scan", frame, items, expected_r_px=round(expected_r, 1), closeup=False)
     return out
 
