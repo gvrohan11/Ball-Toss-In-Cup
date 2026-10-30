@@ -31,7 +31,8 @@ obstacles so it can't hit the table. Detectors and 3D vision are config blocks; 
 lines of Python. We drove it with an AI agent through Viam's MCP server while we calibrated."
 
 ## 1:50 – The throw (live if it's landing, else video) (40 s)
-`python pick_and_throw.py --aim-cup --go --i-checked-with-staff`
+`python pick_and_throw.py --aim-cup --cradle --go --i-checked-with-staff` (cup ~95 cm) or `--far`
+default (80-100 cm). Pick whichever landed more consistently in the morning.
 "Past ~95 cm it can't reach, so it throws. The swing was designed on the arm's kinematic model,
 checked against the table and ceiling before every throw, and the speed is picked from its own
 past throws in Atlas: `python throw_fit.py` shows model vs real landing per throw style."

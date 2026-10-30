@@ -110,8 +110,11 @@ def yaw_for_cup(x, y):
 
 def reach_mm(preset, ratio=1.0):
     """(min, max) cup distance a preset can reach, mm."""
-    t = PRESETS[preset]["table"]
-    return round(t[0][1] * ratio) - 60, round(t[-1][1] * ratio) + 40
+    p = PRESETS[preset]
+    t = p["table"]
+    # can't slow below the table's first speed -> only a small margin on the short side
+    short = 20 if p["min_speed"] >= t[0][0] else 60
+    return round(t[0][1] * ratio) - short, round(t[-1][1] * ratio) + 40
 
 
 def speed_for(distance_mm, preset="far", ratio=1.0):
