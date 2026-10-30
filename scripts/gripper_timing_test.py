@@ -5,6 +5,7 @@ home, a slow small joint move (elbow -20 deg at 25 deg/s, ~1 s) - nothing like t
 
     python scripts/gripper_timing_test.py          # dry run: prints the plan
     python scripts/gripper_timing_test.py --go     # runs it (someone near the E-stop)
+    python scripts/gripper_timing_test.py --go --partial   # the throw's open: +90 units at gripper speed 5000
 
 It prints, in seconds from the start of the move:
   - when the gripper position first changed (the fingers started opening)
@@ -68,15 +69,22 @@ async def main():
                 p = await pos(gripper)
                 t = time.monotonic() - t0
                 samples.append((t, p))
-                if log["first_change"] is None and p is not None and last is not None and abs(p - last) > 15:
+                if log["first_change"] is None and p is not None and closed is not None and abs(p - closed) > 8:
                     log["first_change"] = t
                 last = p
                 await asyncio.sleep(0.03)
 
+        partial = "--partial" in sys.argv
+        if partial:
+            await gripper.do_command({"set_gripper_speed": 5000})
+
         async def opener():
             await asyncio.sleep(OPEN_AFTER_S)
             log["open_called"] = time.monotonic() - t0
-            await gripper.open()
+            if partial:
+                await gripper.do_command({"set": float(closed + 90)})
+            else:
+                await gripper.open()
             log["open_returned"] = time.monotonic() - t0
 
         async def mover():
@@ -94,6 +102,9 @@ async def main():
         print(f"samples: {len(samples)}; position trace (every 5th): "
               + ", ".join(f"{t:.2f}s:{p}" for t, p in samples[::5]))
         fc, md = log["first_change"], log["move_done"]
+        if fc is not None and log["open_called"] is not None:
+            print(f"\nFINGER REACTION: started moving {fc - log['open_called']:.2f} s after the open command "
+                  f"({'partial +90 @5000' if partial else 'full open'})")
         if fc is not None and md is not None:
             print("\nVERDICT:", "fingers started opening DURING the move -> mid-swing release is possible"
                   if fc < md - 0.1 else "fingers only moved AFTER the move ended -> the gripper is queued behind the arm")

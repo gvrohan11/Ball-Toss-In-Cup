@@ -169,7 +169,10 @@ def plan(distance_mm, preset="far", speed=None, release_delay_s=None, ratio=1.0,
     if spd > MAX_SPEED:
         raise ValueError(f"speed above the module limit ({MAX_SPEED} deg/s)")
     cradle = p.get("release") == "cradle"
-    delay = 0.0 if cradle else (release_delay(spd, preset) if release_delay_s is None else float(release_delay_s))
+    if release_delay_s is not None:
+        delay = float(release_delay_s)
+    else:
+        delay = 0.0 if cradle else release_delay(spd, preset)
     if not -0.6 <= delay <= 0.6:
         raise ValueError("--release-delay must be between -0.6 and 0.6 s")
     swing = {j: d * scale for j, d in p["swing"].items()}
