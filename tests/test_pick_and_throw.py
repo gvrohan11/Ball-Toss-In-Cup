@@ -1,0 +1,124 @@
+import asyncio
+import os
+import sys
+from types import SimpleNamespace
+
+import pytest
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+import pick_and_throw as pt  # noqa: E402
+
+
+class Motion:
+    def __init__(self):
+        self.moves = []
+
+    async def move(self, component_name, destination):
+        self.moves.append(destination.pose)
+        return True
+
+
+class Robot:
+    async def close(self):
+        pass
+
+
+@pytest.fixture
+def rig(monkeypatch):
+    m, events = Motion(), []
+
+    async def connect():
+        return Robot()
+
+    async def release(robot, motion, go):
+        events.append("release_check")
+
+    async def find(robot, motion, go):
+        return (400.0, 0.0, 10.0)
+
+    async def back(robot, motion, ball, go):
+        events.append("put_back")
+
+    monkeypatch.setattr(pt, "connect", connect)
+    monkeypatch.setattr(pt.MotionClient, "from_robot", staticmethod(lambda r, n: m))
+    monkeypatch.setattr(pt, "release_if_holding", release)
+    monkeypatch.setattr(pt, "find_ball", find)
+    monkeypatch.setattr(pt, "put_ball_back", back)
+    monkeypatch.setattr(pt, "ask_landing", lambda: {"hit": False, "long_cm": -30})
+    return m, events
+
+
+def args(**kw):
+    d = dict(distance=1100.0, scale=1.0, no_release=False, go=True, i_checked_with_staff=True)
+    d.update(kw)
+    return SimpleNamespace(**d)
+
+
+def test_throws_only_after_a_good_pick(rig, monkeypatch):
+    m, events = rig
+    thrown = []
+
+    async def pick(robot, ball, go):
+        return True
+
+    async def throw(robot, d, go, scale, release):
+        thrown.append((d, go))
+        return {"distance_mm": d}
+
+    logged = []
+    import logger
+    monkeypatch.setattr(logger, "log_attempt", lambda doc: logged.append(doc))
+    monkeypatch.setattr(pt, "pick", pick)
+    monkeypatch.setattr(pt.throw, "throw", throw)
+    asyncio.run(pt.run(args()))
+    assert thrown == [(1100.0, True)]
+    assert logged and logged[0]["phase"] == "throw" and logged[0]["result"]["long_cm"] == -30
+
+
+def test_missed_pick_never_throws(rig, monkeypatch):
+    m, events = rig
+
+    async def pick(robot, ball, go):
+        return False
+
+    async def throw(*a, **k):
+        raise AssertionError("must not throw without the ball")
+
+    monkeypatch.setattr(pt, "pick", pick)
+    monkeypatch.setattr(pt.throw, "throw", throw)
+    asyncio.run(pt.run(args()))
+
+
+def test_failure_after_pick_puts_ball_back(rig, monkeypatch):
+    m, events = rig
+
+    async def pick(robot, ball, go):
+        return True
+
+    async def throw(*a, **k):
+        raise RuntimeError("swing failed")
+
+    monkeypatch.setattr(pt, "pick", pick)
+    monkeypatch.setattr(pt.throw, "throw", throw)
+    with pytest.raises(RuntimeError):
+        asyncio.run(pt.run(args()))
+    assert "put_back" in events
+
+
+def test_refuses_live_without_staff_flag(rig, monkeypatch):
+    m, events = rig
+    seen = []
+
+    async def pick(robot, ball, go):
+        seen.append(go)
+        return None
+
+    async def throw(robot, d, go, scale, release):
+        seen.append(("throw", go))
+        return {}
+
+    monkeypatch.setattr(pt, "pick", pick)
+    monkeypatch.setattr(pt.throw, "throw", throw)
+    asyncio.run(pt.run(args(i_checked_with_staff=False)))
+    assert seen == [None, ("throw", False)] or all(x in (None, False, ("throw", False)) for x in seen)
+    assert m.moves == []                      # dry run: nothing moved
