@@ -81,6 +81,9 @@ def best_ball(dets):
 
 
 BALL_CENTER_Z = -10 + BALL_DIAMETER_MM / 2   # real tabletop (-10) + radius
+# Which ball to pick: "orange" (default, colour finder, the validated path), "white" or "any"
+# (shape finder: depth sphere fit for the first look, circle search for the close-up).
+BALL_COLOR = "orange"
 
 
 async def _frame(cam):
@@ -92,6 +95,74 @@ async def _frame(cam):
     return cv2.imdecode(np.frombuffer(images[0].data, np.uint8), cv2.IMREAD_COLOR)
 
 
+async def _color_and_depth(cam):
+    import cv2
+    import numpy as np
+    images, _ = await cam.get_images(timeout=20)
+    src = {im.name: im for im in images}
+    if "color" not in src or "depth" not in src:
+        raise RuntimeError("Need aligned color + depth from the camera")
+    bgr = cv2.imdecode(np.frombuffer(src["color"].data, np.uint8), cv2.IMREAD_COLOR)
+    depth = np.asarray(src["depth"].bytes_to_depth_array())
+    if bgr is None or bgr.shape[:2] != depth.shape:
+        raise RuntimeError("Color/depth images are not aligned")
+    return bgr, depth
+
+
+async def locate_ball_shape(robot, prefer_center=False):
+    """Non-orange (white / any) ball, same return as locate_ball. Coarse look uses depth
+    (camera must be ~40+ cm up); the close-up look (prefer_center) uses the circle search
+    and the same calibrated ray-plane position as the orange ball."""
+    import white_ball
+    from cup_aim import _pixel_to_table
+
+    cam = Camera.from_robot(robot, CAMERA)
+    k = (await cam.get_properties()).intrinsic_parameters
+    if k.focal_x_px <= 0 or k.focal_y_px <= 0:
+        raise ValueError("Camera intrinsics must have positive focal lengths")
+    if not prefer_center:
+        bgr, depth = await _color_and_depth(cam)
+        balls = white_ball.coarse_balls(bgr, depth, k, BALL_COLOR)
+        alone = [b for b in balls if not b["touching"]]
+        if balls and not alone:
+            print(f"  {len(balls)} {BALL_COLOR} ball(s) found but all touching others; spread them out")
+            return None
+        if not alone:
+            return None
+        b = alone[0]
+        cx, cy, cz = b["center_camera_mm"]
+        w = (await robot.transform_pose(PoseInFrame(reference_frame=CAMERA,
+                                                    pose=Pose(x=cx, y=cy, z=cz)), "world")).pose
+        pos = (w.x, w.y, BALL_CENTER_Z)
+        print(f"  {b['color']} ball (depth fit, err {b['sphere_error_mm']:.1f} mm), "
+              f"{len(balls)} {BALL_COLOR} ball(s) in view")
+        if not all(math.isfinite(v) for v in pos):
+            raise ValueError("Ball localization returned invalid coordinates")
+        return pos
+    frame = await _frame(cam)
+    if frame is None:
+        return None
+    cam_pos = (await robot.transform_pose(
+        PoseInFrame(reference_frame=CAMERA, pose=Pose(x=0, y=0, z=0)), "world")).pose
+    dist = cam_pos.z - BALL_CENTER_Z
+    if dist <= 50:
+        raise ValueError("Camera is too low to look for balls")
+    expected_r = k.focal_x_px * (BALL_DIAMETER_MM / 2) / dist
+    found = white_ball.closeup_ball(frame, k, expected_r, BALL_COLOR)
+    if not found:
+        return None
+    b = found[0]
+    hit = await _pixel_to_table(robot, k, b["u"], b["v"], BALL_CENTER_Z)
+    if hit is None:
+        return None
+    (x, y, z), _ = hit
+    if not all(math.isfinite(v) for v in (x, y, z)):
+        raise ValueError("Ball localization returned invalid coordinates")
+    print(f"  {b['color']} ball at pixel ({b['u']:.0f},{b['v']:.0f}) r={b['r']:.0f}px "
+          f"(expected {expected_r:.0f})")
+    return (x, y, z)
+
+
 async def locate_ball(robot, prefer_center=False):
     """Ball center (x, y, z) in mm, world frame, from the current camera view, or None.
 
@@ -100,6 +171,8 @@ async def locate_ball(robot, prefer_center=False):
     "huge, close" ball. Position = camera ray through the circle center intersected with
     the plane at ball-center height (not the blob size, which clusters break).
     Balls touching other balls are skipped: the fingers would hit the neighbours."""
+    if BALL_COLOR != "orange":
+        return await locate_ball_shape(robot, prefer_center)
     from ball_finder import find_balls
     from cup_aim import _pixel_to_table
 
@@ -201,8 +274,19 @@ async def pick(robot, ball, go):
     return held
 
 
+def set_ball_color_from_argv():
+    global BALL_COLOR
+    if "--ball" in sys.argv:
+        c = sys.argv[sys.argv.index("--ball") + 1]
+        if c not in ("orange", "white", "any"):
+            raise SystemExit("--ball must be orange, white or any")
+        BALL_COLOR = c
+    return BALL_COLOR
+
+
 async def main():
     go = "--go" in sys.argv
+    set_ball_color_from_argv()
     print("MODE:", "LIVE (arm will move)" if go else "DRY RUN (no motion)")
     robot = await connect()
     try:
