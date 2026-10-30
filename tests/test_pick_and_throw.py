@@ -50,7 +50,7 @@ def rig(monkeypatch):
 
 def args(**kw):
     d = dict(distance=900.0, scale=1.0, no_release=False, release_delay=None, speed=None, yaw=0.0, power=False,
-             direct=False, no_learn=True, aim_cup=False, force_aim=False, go=True, i_checked_with_staff=True)
+             direct=False, no_learn=True, cradle=False, cradle_check=False, partial=False, aim_cup=False, force_aim=False, go=True, i_checked_with_staff=True)
     d.update(kw)
     return SimpleNamespace(**d)
 
@@ -62,7 +62,7 @@ def test_throws_only_after_a_good_pick(rig, monkeypatch):
     async def pick(robot, ball, go):
         return True
 
-    async def throw(robot, pl, go, release=True, direct=None):
+    async def throw(robot, pl, go, release=True, direct=None, partial=False, check_only=False):
         thrown.append((pl["distance_mm"], go))
         return dict(pl)
 
@@ -115,7 +115,7 @@ def test_refuses_live_without_staff_flag(rig, monkeypatch):
         seen.append(go)
         return None
 
-    async def throw(robot, pl, go, release=True, direct=None):
+    async def throw(robot, pl, go, release=True, direct=None, partial=False, check_only=False):
         seen.append(("throw", go))
         return {}
 
@@ -172,7 +172,7 @@ def test_aim_cup_aims_and_logs_the_cup(rig, monkeypatch):
     async def pick(robot, ball, go):
         return True
     plans, logged = [], []
-    async def throw(robot, pl, go, release=True, direct=None):
+    async def throw(robot, pl, go, release=True, direct=None, partial=False, check_only=False):
         plans.append(pl)
         return dict(pl)
     import logger

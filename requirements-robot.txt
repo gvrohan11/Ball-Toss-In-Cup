@@ -1,0 +1,8 @@
+# Light install for the robot computer (docs/RUN_ON_ROBOT.md). No YOLO/torch: cup finding
+# falls back to the rim detector automatically.
+viam-sdk==0.85.1
+numpy
+scipy
+opencv-python-headless
+python-dotenv
+pymongo

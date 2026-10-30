@@ -92,3 +92,99 @@ def test_fit_uses_median_and_needs_data():
     assert throw_fit.fit(docs, "power") == 1.0                   # other preset's data ignored
     wild = [doc("far", 180, round(m * 2), hit=True) for _ in range(5)]
     assert throw_fit.fit(wild, "far") == throw_fit.CLAMP[1]
+
+
+# ---- cradle flow on a fake robot: open BEFORE the swing, nothing during it ----
+import asyncio  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+
+HOME_J = [0.0, 13.26, -44.18, 0.0, -57.29, 0.0]
+
+
+class FakeArm:
+    def __init__(self, log):
+        self.log, self.q = log, list(HOME_J)
+
+    async def get_end_position(self):
+        return SimpleNamespace(x=350.5, y=0.0, z=550.7)
+
+    async def get_joint_positions(self):
+        return SimpleNamespace(values=list(self.q))
+
+    async def move_to_joint_positions(self, jp, extra=None):
+        self.log.append(("move", [round(v, 1) for v in jp.values], extra))
+        self.q = list(jp.values)
+
+    async def do_command(self, cmd):
+        self.log.append(("arm_cmd", cmd))
+        return {}
+
+
+class FakeGripper:
+    def __init__(self, log):
+        self.log = log
+
+    async def do_command(self, cmd):
+        self.log.append(("grip_cmd", cmd))
+        return {"pos": 372} if "get" in cmd else {}
+
+    async def open(self):
+        self.log.append(("open",))
+
+    async def grab(self):
+        self.log.append(("grab",))
+
+
+@pytest.fixture
+def fake(monkeypatch):
+    log = []
+    arm, grip = FakeArm(log), FakeGripper(log)
+    monkeypatch.setattr(throw.Arm, "from_robot", staticmethod(lambda r, n: arm))
+    monkeypatch.setattr(throw.Gripper, "from_robot", staticmethod(lambda r, n: grip))
+
+    class Motion:
+        async def move(self, *a, **k):
+            log.append(("home",))
+            return True
+    monkeypatch.setattr(throw.MotionClient, "from_robot", staticmethod(lambda r, n: Motion()))
+    real_sleep = asyncio.sleep
+    monkeypatch.setattr(throw.asyncio, "sleep", lambda s: real_sleep(0))
+    return log
+
+
+def test_cradle_opens_partially_at_swing_start(fake):
+    pl = throw.plan(960, "cradle")
+    assert pl["release_delay_s"] == 0.0 and 165 <= pl["speed_dps"] <= 180
+    out = asyncio.run(throw.throw(object(), pl, True))
+    moves = [i for i, e in enumerate(fake) if e[0] == "move"]
+    sets = [i for i, e in enumerate(fake) if e[0] == "grip_cmd" and "set" in e[1]]
+    assert len(moves) == 2 and sets and sets[0] > moves[1]           # open goes out right after the swing starts
+    assert ("open",) not in fake                                       # never a full open
+    assert fake[sets[0]][1]["set"] == 372 + throw.CRADLE_OPEN_DELTA
+    assert fake[moves[0]][1][5] == throw.CRADLE["j6"]                  # wrist rolled: fingers above/below
+    assert ("grip_cmd", {"set_gripper_speed": throw.GRIPPER_SPEED}) in fake
+    last_arm = [e for e in fake if e[0] == "arm_cmd"][-1]
+    assert last_arm == ("arm_cmd", {"set_speed": throw.NORMAL_SPEED})  # speed restored
+    assert out["release_mode"] == "cradle" and out["held_pos"] == 372
+
+
+def test_cradle_only_near_full_speed():
+    assert throw.speed_for(800, "cradle") == 165.0
+    lo, hi = throw.reach_mm("cradle")
+    assert lo < 953 and hi > 983 and hi < 1100
+
+
+def test_cradle_check_never_swings(fake):
+    pl = throw.plan(1100, "cradle")
+    out = asyncio.run(throw.throw(object(), pl, True, check_only=True))
+    moves = [e for e in fake if e[0] == "move"]
+    assert len(moves) == 2 and moves[1][1] == [round(v, 1) for v in HOME_J]   # wind-up, then straight back
+    assert ("grab",) in fake and out["check_only"] is True
+    assert not any(e[0] == "arm_cmd" and "set_acceleration" in e[1] for e in fake)
+
+
+def test_partial_open_uses_set_not_open(fake):
+    pl = throw.plan(900, "far")
+    asyncio.run(throw.throw(object(), pl, True, partial=True))
+    assert ("open",) not in fake
+    assert ("grip_cmd", {"set": float(372 + throw.PARTIAL_OPEN_DELTA)}) in fake

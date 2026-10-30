@@ -68,13 +68,20 @@ goal is Phase 2: **throw** the ball into a cup out of drop reach.
   `cup_vision/`: the same detector as a Viam vision service (Rohan).
 - `drop.py`: release pose over the rim. Straight down to x≈650. Beyond that, tilt
   forward `o=(0.7,0,-0.7)`. Reach limit ≈ 95 cm.
-- `throw.py`: two presets. `far` (default): open-hand toss, cups ~80-100 cm, model matched
-  the real landing within ~8 cm. `power`: full-force, direct mode, 1-2 m, timed release
-  (scatters more). `plan()` = speed from the preset table x the Atlas correction, release time,
+- `throw.py`: three presets. `far` (default): open-hand toss, cups ~80-100 cm, model matched
+  the 3 measured landings within ~8 cm. `cradle` (`--cradle`): FAR's swing with the wrist rolled
+  90 deg (fingers above/below the ball = spoon) and a PARTIAL open at swing start, 165-180 deg/s
+  only (cups ~0.9-1.0 m); `--cradle-check` holds the pose with no swing. `power`: full-force,
+  direct mode, 1-2 m, timed release (scatters more). `--partial`: timed release opens partway. `plan()` = speed from the preset table x the Atlas correction, release time,
   joint limits + swept-path check, no robot. `throw()` runs a plan from home. Requires
   `--i-checked-with-staff`. Whip / pitch / lob / the first draft swing were cut Oct 29
   (0 hits; still in git history).
-- `throw_safety.py`: URDF forward kinematics + `path_problems` (from Rohan's toss_ball.py).
+- `throw_safety.py`: URDF forward kinematics + `path_problems` (from Rohan's toss_ball.py). FK
+  checked against the live arm (flange 350.55, 0, 550.76 at home joints: exact).
+- `scripts/design_cradle.py`: ball-exit simulation. Found a fingers-UP cradle is infeasible (max
+  accel brakes the ball at ~1.2-1.8 g); FAR's motion clears the fingertips at 165-180 deg/s.
+- `scripts/latency_check.py` + `docs/RUN_ON_ROBOT.md` + `requirements-robot.txt`: run on the
+  robot computer to remove laptop Wi-Fi jitter.
 - `throw_fit.py`: `correction(preset)` = median(observed / model landing) over recent Atlas
   throws (≥3, clamped 0.8-1.25). Docs with `exclude_from_fit` or bogus distances are skipped.
 - `pick_and_throw.py`: home → (`--aim-cup`) scan + aim → plan + check BEFORE picking → pick →
@@ -100,9 +107,8 @@ goal is Phase 2: **throw** the ball into a cup out of drop reach.
 - `gripper.open()` takes ~0.85-1.15 s to return; the swing is 0.36-0.8 s. Timed releases
   (whip/power/pitch) land at a random point in the swing → big scatter. FAR works because the
   ball sits in the palm and leaves when the arm brakes.
-- Fixes not in code yet: water in the cups (bounce-outs), a cup triangle (bigger target),
-  a spoon/cradle in the gripper (no timing at all), running the throw on the robot computer
-  as a Viam module (no 15-400 ms network jitter).
+- Not in code: water in the cups (bounce-outs), a cup triangle (bigger target). Running on the
+  robot computer is documented (docs/RUN_ON_ROBOT.md), not a module yet.
 - Arm config has `collision_sensitivity: 0` (xArm collision detection off). Ask staff.
 
 ## Running

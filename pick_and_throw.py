@@ -63,7 +63,7 @@ async def run(args):
     if args.go and not go:
         print("Refusing to throw live without --i-checked-with-staff.")
     print("MODE:", "LIVE (arm will move and throw)" if go else "DRY RUN (no motion)")
-    preset = "power" if args.power else "far"
+    preset = throw.preset_from_args(args)
     t0 = time.monotonic()
     robot = await connect()
     try:
@@ -115,13 +115,18 @@ async def run(args):
         try:
             print("3) throw")
             await move_to(motion, HOME, go, "home")
-            info = await throw.throw(robot, pl, go, not args.no_release, True if args.direct else None)
+            info = await throw.throw(robot, pl, go, not args.no_release, True if args.direct else None,
+                                     partial=args.partial, check_only=args.cradle_check)
         except BaseException as e:  # error or Ctrl+C: don't leave the ball in the gripper
             print(f"!! stopped ({type(e).__name__}: {e}); putting the ball back")
             await asyncio.sleep(2.0)  # after a controller stop the arm refuses commands for a moment
             await put_ball_back(robot, motion, ball, go)
             raise
         await move_to(motion, HOME, go, "home")
+        if go and args.cradle_check:
+            print("cradle check done: did the ball stay in? were the fingers above/below it? (not logged)")
+            await put_ball_back(robot, motion, ball, go)
+            return
         if go:
             landing = ask_landing()
             doc = {"phase": "throw", "ball": {"pos_mm": ball}, "cup": cup_doc, "throw": info,

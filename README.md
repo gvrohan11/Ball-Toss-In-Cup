@@ -13,7 +13,10 @@ python main.py --go         # live: home -> survey + remember all cups -> find +
 python pick_and_throw.py --aim-cup            # Phase 2 dry run: find cup, plan + safety-check the throw
 python pick_and_throw.py --aim-cup --go --i-checked-with-staff          # FAR throw at the cup (80-100 cm)
 python pick_and_throw.py --aim-cup --power --go --i-checked-with-staff  # POWER throw for 1-2 m (direct mode)
+python pick_and_throw.py --aim-cup --cradle-check --go --i-checked-with-staff  # spoon pose, NO swing: does the ball stay?
+python pick_and_throw.py --aim-cup --cradle --go --i-checked-with-staff        # spoon throw, cups ~0.9-1.0 m
 python throw_fit.py              # how far each throw preset really goes vs its model (from Atlas)
+python scripts/latency_check.py  # command round-trip; run on laptop AND robot (docs/RUN_ON_ROBOT.md)
 python throw_safety.py           # swept-path check of every throw preset, no robot
 python main.py --go --autotune   # also correct the aim from recent misses stored in Atlas
 python main.py --go --runs 10    # 10 attempts in a row (cups surveyed + remembered first), prints N/10

@@ -66,8 +66,23 @@ POWER = dict(start_j=(-57.4, -65.5, -79.5),
              table=[(60, 900), (80, 1017), (100, 1187), (120, 1412), (140, 1679), (160, 1955), (180, 2179)],
              lead=0.40, min_speed=50.0, direct=True,
              min_delay=0.0)    # fingers point back/down at the start: never open before the swing
-PRESETS = {"far": FAR, "power": POWER}
+# CRADLE (spoon): FAR's swing with the wrist rolled 90 deg so the fingers sit ABOVE and BELOW the ball
+# (the lower finger is a spoon), and a PARTIAL open sent the moment the swing starts. If the fingers
+# open early the ball just rests on the lower finger (instead of dropping out, as FAR did at 19:34),
+# and it leaves the open end when the arm brakes - timing hardly matters.
+# scripts/design_cradle.py (URDF + ball-exit simulation): with FAR's motion the ball clears the
+# fingertips at 165-180 deg/s even from deep in the palm; below that only from the fingertips, so the
+# preset is limited to 165-180 (cups ~0.9-1.0 m). A fingers-UP cradle (open before the swing) is NOT
+# feasible on this arm: 1145 deg/s^2 brakes the ball at only ~1.2-1.8 g, so it never gets out.
+# UNTESTED on the robot: run --cradle-check first (wind-up, open, hold 3 s, no swing).
+CRADLE = dict(start_j=FAR["start_j"], swing=dict(FAR["swing"]),
+              table=[(165, 953), (180, 983)],            # FAR's model (roll doesn't move the ball center)
+              lead=0.0, min_speed=165.0, direct=False, min_delay=0.0, release="cradle", j6=90.0)
+PRESETS = {"far": FAR, "power": POWER, "cradle": CRADLE}
 ACCEL = 1145
+HOLD_POS_TYPICAL = 370        # gripper position while holding a ball (status notes, Oct 29)
+CRADLE_OPEN_DELTA = 90        # open this much past the holding position (~9 mm if 850 = full 85 mm stroke)
+PARTIAL_OPEN_DELTA = 150      # --partial: timed release opens only this far instead of fully
 
 
 def check_limits(start, end):
@@ -144,11 +159,14 @@ def plan(distance_mm, preset="far", speed=None, release_delay_s=None, ratio=1.0,
     spd = max(20.0, spd * scale)
     if spd > MAX_SPEED:
         raise ValueError(f"speed above the module limit ({MAX_SPEED} deg/s)")
-    delay = release_delay(spd, preset) if release_delay_s is None else float(release_delay_s)
+    cradle = p.get("release") == "cradle"
+    delay = 0.0 if cradle else (release_delay(spd, preset) if release_delay_s is None else float(release_delay_s))
     if not -0.6 <= delay <= 0.6:
         raise ValueError("--release-delay must be between -0.6 and 0.6 s")
     swing = {j: d * scale for j, d in p["swing"].items()}
-    start = [yaw_deg, p["start_j"][0], p["start_j"][1], 0.0, p["start_j"][2], 0.0]
+    if p["start_j"] is None:
+        raise ValueError(f"preset {preset!r} has no design yet")
+    start = [yaw_deg, p["start_j"][0], p["start_j"][1], 0.0, p["start_j"][2], p.get("j6") or 0.0]
     end = list(start)
     for j, d in swing.items():
         end[j] += d
@@ -157,6 +175,7 @@ def plan(distance_mm, preset="far", speed=None, release_delay_s=None, ratio=1.0,
     return dict(preset=preset, distance_mm=round(distance_mm), speed_dps=round(spd, 1), accel_dps2=ACCEL,
                 release_delay_s=round(delay, 3), swing_deg=swing, start_j=start, end_j=end,
                 yaw_deg=round(yaw_deg, 1), direct=p["direct"], ratio=round(ratio, 3), scale=scale,
+                release_mode="cradle" if cradle else "timed", j6=p.get("j6"),
                 model_landing_mm=round(model_landing(spd, preset) * ratio))
 
 
@@ -175,13 +194,26 @@ async def _go_home(motion, tries=3):
     return False
 
 
-async def throw(robot, pl, go, release=True, direct=None):
-    """Run a plan from plan(). Starts from home; wind-up and swing are checked direct joint moves."""
+async def _gripper_pos(gripper):
+    try:
+        return float((await gripper.do_command({"get": True})).get("pos"))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+async def throw(robot, pl, go, release=True, direct=None, partial=False, check_only=False):
+    """Run a plan from plan(). Starts from home; wind-up and swing are checked direct joint moves.
+    partial: timed release opens only PARTIAL_OPEN_DELTA past the holding position (less finger travel).
+    check_only: go to the wind-up pose (cradle: open the cradle), hold 3 s, close, go home. No swing."""
     direct = pl["direct"] if direct is None else direct
+    cradle = pl.get("release_mode") == "cradle"
     print(f"1) wind up (joint move) to J2={pl['start_j'][1]} J3={pl['start_j'][2]} J5={pl['start_j'][4]}, "
           f"yaw {pl['yaw_deg']:+.1f} deg")
     print(f"2) {pl['preset'].upper()} swing at {pl['speed_dps']:.0f} deg/s"
-          + (f", open at {pl['release_delay_s'] * 1000:+.0f} ms" if release else ", NO release")
+          + (", spoon release (partial open at swing start)" if cradle and release else
+             f", open at {pl['release_delay_s'] * 1000:+.0f} ms" + (" (partial)" if partial else "") if release
+             else ", NO release")
+          + (" [CHECK ONLY: no swing]" if check_only else "")
           + f" (cup {pl['distance_mm']} mm, model lands {pl['model_landing_mm']} mm, "
             f"{'direct' if direct else 'servo'} mode, scale {pl['scale']})")
     if not go:
@@ -193,7 +225,8 @@ async def throw(robot, pl, go, release=True, direct=None):
         raise RuntimeError(f"Start from home first (arm at {pose.x:.0f}, {pose.y:.0f}, {pose.z:.0f}). "
                            "Run `python home.py`.")
     cur = list((await arm.get_joint_positions()).values)
-    start = [cur[0] + pl["yaw_deg"], pl["start_j"][1], pl["start_j"][2], cur[3], pl["start_j"][4], cur[5]]
+    j6 = pl["j6"] if pl.get("j6") is not None else cur[5]
+    start = [cur[0] + pl["yaw_deg"], pl["start_j"][1], pl["start_j"][2], cur[3], pl["start_j"][4], j6]
     end = list(start)
     for j, d in pl["swing_deg"].items():
         end[j] += d
@@ -208,6 +241,18 @@ async def throw(robot, pl, go, release=True, direct=None):
     try:
         await arm.do_command({"set_speed": NORMAL_SPEED})
         await arm.move_to_joint_positions(JointPositions(values=start), extra=extra(NORMAL_SPEED, 300.0))
+        held = await _gripper_pos(gripper)
+        cradle_pos = (held if held is not None else HOLD_POS_TYPICAL) + CRADLE_OPEN_DELTA
+        if check_only:
+            if cradle:
+                print(f"   cradle: gripper {held} -> {cradle_pos:.0f}")
+                await gripper.do_command({"set": float(cradle_pos)})
+            print("   CHECK: fingers should be ABOVE and BELOW the ball and the ball should stay put. Holding 3 s...")
+            await asyncio.sleep(3.0)
+            await gripper.grab()
+            await arm.move_to_joint_positions(JointPositions(values=cur), extra=extra(NORMAL_SPEED, 300.0))
+            await _go_home(motion)
+            return {**pl, "check_only": True}
         if release:
             try:
                 prev_gs = (await gripper.do_command({"get_gripper_speed": True})).get("gripper_speed")
@@ -220,7 +265,12 @@ async def throw(robot, pl, go, release=True, direct=None):
 
         async def open_gripper():
             stamps["open_called"] = time.monotonic()
-            await gripper.open()
+            if cradle:
+                await gripper.do_command({"set": float(cradle_pos)})
+            elif partial:
+                await gripper.do_command({"set": float((held or HOLD_POS_TYPICAL) + PARTIAL_OPEN_DELTA)})
+            else:
+                await gripper.open()
             stamps["open_returned"] = time.monotonic()
 
         def start_swing():
@@ -260,13 +310,19 @@ async def throw(robot, pl, go, release=True, direct=None):
                 pass
         print("3) speed restored")
     await _go_home(motion)
-    return {**pl, "direct": direct, "released": release, "timing": timing}
+    return {**pl, "direct": direct, "released": release, "partial_open": partial, "held_pos": held,
+            "timing": timing}
 
 
 def add_args(ap):
     """Throw options shared by throw.py and pick_and_throw.py."""
     ap.add_argument("--distance", type=float, default=None, help="cup distance from the base, mm")
     ap.add_argument("--power", action="store_true", help="full-force preset for 1-2 m (direct mode)")
+    ap.add_argument("--cradle", action="store_true",
+                    help="spoon throw: FAR swing, fingers above/below the ball, partial open at swing start")
+    ap.add_argument("--cradle-check", action="store_true",
+                    help="go to the cradle wind-up, open the cradle, hold 3 s, close, go home. NO swing")
+    ap.add_argument("--partial", action="store_true", help="timed release opens partway, not fully")
     ap.add_argument("--speed", type=float, default=None, help="override the swing speed, deg/s (max 180)")
     ap.add_argument("--release-delay", type=float, default=None, help="override the open time, s from swing start")
     ap.add_argument("--scale", type=float, default=1.0, help="0.1-1: shrink swing + speed for a first look")
@@ -278,8 +334,14 @@ def add_args(ap):
     ap.add_argument("--i-checked-with-staff", action="store_true")
 
 
+def preset_from_args(a):
+    if getattr(a, "cradle", False) or getattr(a, "cradle_check", False):
+        return "cradle"
+    return "power" if a.power else "far"
+
+
 def plan_from_args(a, distance_mm, yaw_deg=None):
-    preset = "power" if a.power else "far"
+    preset = preset_from_args(a)
     ratio = 1.0
     if not a.no_learn and a.speed is None:
         import throw_fit
@@ -300,7 +362,8 @@ async def _main():
     pl = plan_from_args(a, a.distance)
     robot = await connect()
     try:
-        print(await throw(robot, pl, go, not a.no_release, True if a.direct else None))
+        print(await throw(robot, pl, go, not a.no_release, True if a.direct else None,
+                          partial=a.partial, check_only=a.cradle_check))
     finally:
         await robot.close()
 
