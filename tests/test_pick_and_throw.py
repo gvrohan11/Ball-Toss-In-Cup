@@ -74,7 +74,7 @@ def test_throws_only_after_a_good_pick(rig, monkeypatch):
     asyncio.run(pt.run(args()))
     assert thrown == [(900, True)]
     assert logged and logged[0]["phase"] == "throw" and logged[0]["result"]["long_cm"] == -30
-    assert logged[0]["throw"]["preset"] == "far"
+    assert logged[0]["throw"]["preset"] == "power"          # the default since Oct 30
 
 
 def test_missed_pick_never_throws(rig, monkeypatch):
@@ -194,12 +194,12 @@ def test_aim_cup_refuses_when_no_cup_is_in_the_band(rig, monkeypatch):
 
 
 def test_aim_cup_targets_most_straight_ahead_cup_in_the_band_and_logs_it(rig, monkeypatch):
-    # 600 mm: too close for FAR's band; 880/90 (6 deg left) and 950/-200 (12 deg right) are in it
+    # 600 mm: too close for POWER's band (from ~76 cm); 880/90 (6 deg left) and 950/-200 (12 deg right) are in it
     # -> the one closest to straight ahead = 880/90; numbered right->left: (950,-200)=1, (600,0)=2, (880,90)=3
     calls = fake_survey(monkeypatch, [(600.0, 0.0, 100.0), (950.0, -200.0, 100.0), (880.0, 90.0, 100.0)])
     plans, logged = recorder(monkeypatch, [{"hit": False, "long_cm": 5, "outcome": "long"}])
     asyncio.run(pt.run(args(aim_cup=True, distance=None)))
-    assert "far band" in calls[0]
+    assert "power band" in calls[0]
     assert len(plans) == 1 and plans[0]["yaw_deg"] > 0 and abs(plans[0]["distance_mm"] - 885) < 2
     assert logged[0]["cup"]["dist_mm"] == 885 and logged[0]["cup"]["number"] == 3 and logged[0]["cup"]["of"] == 3
 
@@ -266,3 +266,10 @@ def test_plain_phrases():
     assert pt.parse_landing("it dropped")["outcome"] == "dropped"
     assert pt.parse_landing("-12")["outcome"] == "short"
     assert pt.parse_landing("12, -3") == {"hit": False, "long_cm": 12.0, "outcome": "long", "left_cm": -3.0}
+
+
+def test_default_is_power_and_far_still_available():
+    import throw
+    assert throw.preset_from_args(args()) == "power"
+    assert throw.preset_from_args(args(far=True)) == "far"
+    assert throw.preset_from_args(args(cradle=True)) == "cradle"
