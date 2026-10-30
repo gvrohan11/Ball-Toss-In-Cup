@@ -116,15 +116,17 @@ async def _color_frame(robot):
     return cv2.imdecode(np.frombuffer(images[0].data, np.uint8), cv2.IMREAD_COLOR)
 
 
-async def find_cups_by_rim(robot, topdown=False, seen=None):
+async def find_cups_by_rim(robot, topdown=False, seen=None, frame=None):
     """Rim centers of EVERY cup opening in the current view (pink-white opening).
     Works when the held ball hides the red side.
     topdown=True when the camera points straight down (different calibration).
-    seen: optional dict; gets the frame and every candidate (kept or not) for the log."""
+    seen: optional dict; gets the frame and every candidate (kept or not) for the log.
+    frame: an already captured color frame (so rim + YOLO judge the SAME image)."""
     from cup_rim import find_cup_rims
     seen = {} if seen is None else seen
     seen.setdefault("items", [])
-    frame = await _color_frame(robot)
+    if frame is None:
+        frame = await _color_frame(robot)
     seen["frame"] = frame
     if frame is None:
         return []
@@ -227,15 +229,18 @@ async def find_cups(robot, topdown=False):
     """Rim centers (x, y, z) in mm, world frame, of every cup in the CURRENT view ([] if none).
     Rim method + YOLO on every frame (see combine); the red-body detector only when
     neither found anything in an angled view."""
-    seen = {"items": []}
-    try:
-        cups = await find_cups_by_rim(robot, topdown, seen)
-    except Exception as e:  # never let one method break the loop
-        print(f"  [cup] rim method failed ({e})")
-        cups = []
+    # One capture for both: YOLO grabs color + depth, the rim method reuses that color
+    # frame. Two separate grabs only match while the arm is perfectly still (a dry run
+    # during someone else's motion showed YOLO boxes ~200 px below the cups).
     ys = {}
     await _yolo_cups(robot, ys)
     yolo_items = ys.get("items", [])
+    seen = {"items": []}
+    try:
+        cups = await find_cups_by_rim(robot, topdown, seen, frame=ys.get("frame"))
+    except Exception as e:  # never let one method break the loop
+        print(f"  [cup] rim method failed ({e})")
+        cups = []
     detector = "cup_rim" + ("+yolo" if ys else "")
     try:
         if not cups and not topdown and not any(it.get("kept") for it in yolo_items):

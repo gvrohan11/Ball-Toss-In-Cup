@@ -102,6 +102,17 @@ goal is Phase 2: **throw** the ball into a cup out of drop reach.
   view pose, every candidate kept/rejected with reason and world mm, survey/target/result
   events). Detectors call `detection_log.record(...)`; no-op unless `main.attempt` started a
   log. `python detection_log.py` summarizes the newest folder.
+- `ball_finder.py`: orange mask → per blob a RANSAC circle fit to its edge (shadow / blur
+  bulges are outliers; `bulge_px` = how far the centroid would have been off); blobs > 1.6
+  balls are split by repeated edge fits (Hough as fallback) and must be ≥ 70% covered; YOLO (COCO "orange" —
+  that's how it labels the ping-pong ball) confirms each ball and adds ones color missed
+  (outline circle fit). `pick_ball.closeup`: 0.5 s settle, median of 3 close-up readings.
+- `scripts/debug_ball.py`: read-only debugger (replay logged frames, or `live`): mask,
+  blobs, fits, YOLO boxes, bulge, sharpness, and where the gripper would grab.
+- `scripts/compare_ball_detection.py [--panels]`: old (frozen Hough-only) vs new detector on every
+  logged ball frame: found, flips on re-save, center shift, shadow pull, time.
+- `scripts/calibrate_pick.py --go`: sets the ball down at known spots and measures it →
+  the real `CAM_CORRECTION_MM` (currently (-15, 20) from ONE pick; misses land ~1-2 cm off).
 - `scripts/gripper_timing_test.py`, `scene_detection.py`: diagnostic / white-ball helpers.
 - Docs: `TASKS.md` (owners, calibration history, log schema incl. the Phase 2 `throw`
   field), `DEMO.md`, `DASHBOARD.md`, `docs/cup-detection.md`.
