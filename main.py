@@ -132,6 +132,25 @@ def _xy(cups):
     return " ".join(f"({c['pos_mm'][0]:.0f},{c['pos_mm'][1]:+.0f})" for c in cups) or "-"
 
 
+async def scan_for_cup(motion, robot, go):
+    """Kept for pick_and_throw.py --aim-cup: try the CUP_SCAN views in order and return the first
+    cup found (x, y, z), or None. Uses cup_aim.find_cup (rim method + YOLO)."""
+    import cup_aim
+    for i, look in enumerate(CUP_SCAN, 1):
+        print(f"  view {i}/{len(CUP_SCAN)}: {fmt_pose(look)}")
+        try:
+            await move_to(motion, look, go, label=f"cup_view_{i}")
+        except Exception as e:  # noqa: BLE001
+            print(f"    can't reach this view ({str(e)[:80]}); skipping")
+            continue
+        if go:
+            await asyncio.sleep(VIEW_SETTLE_S)
+        cup = await cup_aim.find_cup(robot, topdown=(look["o_z"] == -1))
+        if cup is not None:
+            return cup
+    return None
+
+
 async def survey_cups(motion, robot, go):
     """Look at the table from EVERY view in CUP_SCAN (skipping views the planner can't
     reach) and return all cups found, in the world frame, nearest first."""
