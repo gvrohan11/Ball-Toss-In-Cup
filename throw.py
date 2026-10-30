@@ -207,9 +207,10 @@ def swing_from_args(a):
 
 # xArm firmware limit seen live (Oct 29): "Linear speed exceeds limit in ServoJ mode" stopped the lob
 # mid-swing at ~2.8 m/s of gripper speed (J2 180 deg/s). Earlier swings peaked ~1.65 m/s and ran
-# fine. Gripper speed is about 2.79 m/s * (joint speed / 180), so keep the lob at --speed 120 or below
-# (~1.9 m/s) and go down in steps of 10 if it still trips.
-LOB_SPEED_DPS = 120
+# fine. 120 deg/s ALSO tripped it (Oct 29, 18:27), so the limit is lower than the linear estimate
+# (gripper speed ~ 2.79 m/s * speed/180). Default is a safe 80; run scripts/lob_speed_sweep.py --go to
+# find the real maximum and then pass --speed.
+LOB_SPEED_DPS = 80
 
 # LOB: ball leaves almost straight UP at full speed. Measured Oct 29 at the middle of the swing
 # (gripper mm per degree, forward/up): J2+ (-2.2, +8.2), J3+ (-4.8, -7.3), J5+ (+3.4, 0).

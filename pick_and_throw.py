@@ -71,6 +71,7 @@ async def run(args):
                                      throw.LOB_START_J if args.lob else None)
         except BaseException as e:  # error or Ctrl+C: don't leave the ball in the gripper
             print(f"!! stopped ({type(e).__name__}: {e}); putting the ball back")
+            await asyncio.sleep(2.0)  # after a controller stop the arm refuses commands for a moment
             await put_ball_back(robot, motion, ball, go)
             raise
         await move_to(motion, HOME, go, "home")
