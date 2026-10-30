@@ -61,7 +61,7 @@ def test_throws_only_after_a_good_pick(rig, monkeypatch):
     async def pick(robot, ball, go):
         return True
 
-    async def throw(robot, d, go, scale, release, delay=None, swing=None, speed=None, accel=None, wind_z=None, start_j=None, yaw=0.0):
+    async def throw(robot, d, go, scale, release, delay=None, swing=None, speed=None, accel=None, wind_z=None, start_j=None, yaw=0.0, gripper_speed=None):
         thrown.append((d, go))
         return {"distance_mm": d}
 
@@ -113,7 +113,7 @@ def test_refuses_live_without_staff_flag(rig, monkeypatch):
         seen.append(go)
         return None
 
-    async def throw(robot, d, go, scale, release, delay=None, swing=None, speed=None, accel=None, wind_z=None, start_j=None, yaw=0.0):
+    async def throw(robot, d, go, scale, release, delay=None, swing=None, speed=None, accel=None, wind_z=None, start_j=None, yaw=0.0, gripper_speed=None):
         seen.append(("throw", go))
         return {}
 
