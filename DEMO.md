@@ -36,7 +36,9 @@ default (80-100 cm). Pick whichever landed more consistently in the morning.
 "Past ~95 cm it can't reach, so it throws. The swing was designed on the arm's kinematic model,
 checked against the table and ceiling before every throw, and the speed is picked from its own
 past throws in Atlas: `python throw_fit.py` shows model vs real landing per throw style."
-Cups: a triangle with ~2 cm of water (stops bounce-outs), front cup ~90 cm out.
+Cups: an ARC of 4-6 cups, all ~97 cm from the arm base, 2-3 cm gaps, ~2 cm of water each.
+"Distance is the hard part of a throw, so every cup is at the robot's best distance; it turns to aim."
+`--fill-cups` fills them one by one and never re-targets a filled cup.
 
 ## 2:30 – What's next (10 s)
 "Run the throw as a Viam module on the robot computer, so any xArm team can call `throw` with a
