@@ -125,3 +125,12 @@ def test_lob_dry_run(monkeypatch):
     assert out["dry_run"] is True
     a = SimpleNamespace(j2=None, j3=None, j5=None, lob=True)
     assert throw.swing_from_args(a) == throw.LOB_SWING
+
+
+def test_lob_default_speed_is_below_the_controller_limit(monkeypatch):
+    for cls in (throw.MotionClient, throw.Arm, throw.Gripper):
+        monkeypatch.setattr(cls, "from_robot", staticmethod(lambda r, n: object()))
+    # peak gripper speed ~ 2.79 m/s * speed/180; 180 deg/s tripped the xArm limit, so stay well under it
+    assert throw.LOB_SPEED_DPS <= 130
+    out = asyncio.run(throw.throw(object(), 500, False, swing_deg=throw.LOB_SWING, start_j=throw.LOB_START_J))
+    assert out["dry_run"] is True
