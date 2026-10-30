@@ -43,17 +43,24 @@ goal is Phase 2: **throw** the ball into a cup out of drop reach.
   **remembered in world frame**) → `find_ball` → `pick` → `drop_in_cup` at the chosen cup
   (no re-look) → home → ask hit/miss → `log_attempt`. `--ball orange|white|any`,
   `--autotune`, `--runs N` (series + summary), `--cup N` (default: nearest reachable).
-  Cups farther than `drop.REACH_MAX_MM` (950) are refused BEFORE the pick.
+  Cups farther than `drop.REACH_MAX_MM` (950) are DISCARDED right after the survey (location
+  printed, `discarded` event) and never targeted.
+  `--fill-cups` (`fill_all_cups`): cups stay put, several balls near the robot. Survey ONCE,
+  then one ball per reachable cup, nearest first; a hit discards the cup (location printed,
+  `discarded` event in the survey's log folder), a miss retries it (`MAX_TRIES_PER_CUP`).
+  The survey sets `pick_ball.AVOID_XY`: balls within 9 cm of a cup are never picked.
   `cup_aim.find_cups` returns every cup in the current view; `find_cup` = first of those.
 - `pick_ball.py`: look, center the camera over the ball, re-detect, then descend / close /
   lift at `PICK_SPEED_DEG_S` (`slow()` restores 60 deg/s in a `finally`). Grab at `GRAB_Z=70`.
+  Missed grab → `look_again` (open, lift, camera over the spot, re-measure) and retry, up
+  to `PICK_RETRIES` (3); gives up if the ball is gone or > 10 cm away, ending open and up.
   `ball_finder.py` / `white_ball.py`: OpenCV ball detection (orange HSV, white via depth).
 - `cup_aim.py`: angled scan views (`CUP_SCAN`). `find_cups` runs, per frame, the rim method
   (`cup_rim.py`: pink-white opening + red band; positions calibrated by real drops) AND YOLO
   (`cup_detection.py`), and `combine`s them: same cup (rim box center inside YOLO box) →
   rim position + YOLO-vs-rim offset recorded; YOLO-only cups → YOLO depth position +
-  `cup_detection.CUP_CORRECTION_MM` (still (0,0): set it from the survey's "YOLO vs rim"
-  line). Viam's red `cup-detector` only when neither found anything. `--no-yolo` = rim only.
+  `cup_detection.CUP_CORRECTION_MM` = (-54, +22), measured from 163 shared sightings;
+  re-check with each survey's "YOLO vs rim" line). Survey needs ≥ 3 sightings per cup. Viam's red `cup-detector` only when neither found anything. `--no-yolo` = rim only.
 - `cup_detection.py`: YOLO11m-seg (COCO "cup", `cup_vision/core.py`) + `screen()`: keeps only
   red solo cups (pink opening ≥ 18% of the mask; paper cups / cans ≤ 9% on real frames),
   drops cut-off openings and boxes inside stronger ones. 3D: rim ellipse fit, else a circle

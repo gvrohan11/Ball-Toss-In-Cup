@@ -118,6 +118,29 @@ def test_ball_candidates_and_choice_are_logged(log, fake_view, monkeypatch):
     assert not touching["kept"] and touching["why"] == "touching another ball"
 
 
+def test_ball_in_a_cup_is_never_picked(log, fake_view, monkeypatch):
+    """--fill-cups: a ball already dropped in a cup can be in view; pick the free one."""
+    import ball_finder
+    balls = [dict(u=600, v=300, r=30, touching=False), dict(u=900, v=300, r=30, touching=False)]
+    monkeypatch.setattr(ball_finder, "find_balls", lambda frame, r: balls)
+    monkeypatch.setattr(pick_ball, "BALL_COLOR", "orange")
+    monkeypatch.setattr(pick_ball, "AVOID_XY", [(610.0, 290.0)])     # a surveyed cup at the 1st ball
+    monkeypatch.setattr(pick_ball.Camera, "from_robot", staticmethod(lambda r, n: FakeCam()))
+
+    async def frame(cam):
+        return fake_view
+
+    class Robot:
+        async def transform_pose(self, p, dest):
+            return SimpleNamespace(pose=SimpleNamespace(x=0, y=0, z=400))
+
+    monkeypatch.setattr(pick_ball, "_frame", frame)
+    pos = asyncio.run(pick_ball.locate_ball(Robot()))
+    assert pos[:2] == (900.0, 300.0)
+    in_cup, free = lines(log)[0]["items"]
+    assert in_cup["why"] == "in or next to a cup" and free["chosen"]
+
+
 def test_events_and_summary(log):
     detection_log.context("survey")
     detection_log.event("survey", cups=[{"pos_mm": (600, 0, 110), "sightings": 4}])

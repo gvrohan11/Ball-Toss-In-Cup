@@ -141,7 +141,7 @@ def frame_with(monkeypatch):
     monkeypatch.setattr(cup_aim, "YOLO_OFFSETS", [])
     monkeypatch.setattr(cup_aim, "USE_YOLO", True)
     monkeypatch.setattr(cup_aim, "_yolo_off", None)
-    monkeypatch.setattr(cup_detection, "CUP_CORRECTION_MM", (5.0, -5.0))
+    monkeypatch.setattr(cup_detection, "CUP_CORRECTION_MM", (5.0, -5.0))   # test value, not the real one
 
     def setup(rim_items, yolo_items):
         async def rim(robot, topdown, seen):
@@ -204,3 +204,8 @@ def test_real_frame_paper_cup_and_cans_rejected():
     items = [it for _, it in cup_detection.screen(det.detect(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)), bgr)]
     kept = sorted(it["box"][0] for it in items if it["kept"])
     assert len(kept) == 2 and abs(kept[0] - 510) < 15 and abs(kept[1] - 769) < 15
+
+
+def test_yolo_correction_matches_measured_offset():
+    """Set from 163 rim/YOLO shared sightings on sfhack11; (0, 0) made duplicate cups."""
+    assert cup_detection.CUP_CORRECTION_MM == (-54.0, 22.0)

@@ -6,6 +6,8 @@ python main.py --go --autotune   # also shift the aim by the average of recent m
 python main.py --go --runs 10    # 10 attempts in a row; put the ball back between them
 python main.py --go --cup 2      # drop into cup 2 of the survey (1 = nearest, default)
 python main.py --go --no-yolo    # cup survey with the rim method only (YOLO off)
+python main.py --go --fill-cups  # several balls near the robot, cups stay put: survey once,
+                                 # one ball per cup (nearest first); filled cups are discarded
 python detection_log.py          # what the camera saw + detected in the last attempt
 
 The table is surveyed FIRST, with the gripper empty (the held ball used to hide the cup's
@@ -99,7 +101,9 @@ async def put_ball_back(robot, motion, ball, go):
 
 CUP_READINGS = 3      # frames per view
 CUP_MERGE_MM = 50     # sightings this close are the same cup (solo cup openings are ~95 mm wide)
-CUP_MIN_SIGHTINGS = 2  # fewer than this across the whole survey = glare/noise, ignored
+CUP_MIN_SIGHTINGS = 3  # fewer than this across the whole survey = glare/noise, ignored
+                       # (real cups: 9-20 sightings per survey on Oct 29; strays: 2)
+VIEW_SETTLE_S = 0.5    # after arriving at a view: the first frames were motion-blurred
 
 
 def merge_sightings(sightings, min_sightings=CUP_MIN_SIGHTINGS):
@@ -142,6 +146,8 @@ async def survey_cups(motion, robot, go):
         except Exception as e:
             print(f"{name}: can't reach, skipped ({str(e)[:60]})")
             continue
+        if go:
+            await asyncio.sleep(VIEW_SETTLE_S)
         detection_log.context(f"cup_view_{i}", max_frames=1, view=look)   # images for 1 frame per view
         seen = []
         for _ in range(CUP_READINGS):
@@ -154,6 +160,8 @@ async def survey_cups(motion, robot, go):
                 await TEL.thumbnail("cup_view")
         sightings += seen
     cups = merge_sightings(sightings)
+    import pick_ball
+    pick_ball.AVOID_XY = [c["pos_mm"][:2] for c in cups]   # never pick a ball out of a cup
     detection_log.context("survey")
     detection_log.event("survey", cups=cups, sightings=sightings)
     yolo_vs_rim(cup_aim.YOLO_OFFSETS)
@@ -161,8 +169,14 @@ async def survey_cups(motion, robot, go):
     for n, c in enumerate(cups, 1):
         x, y, z = c["pos_mm"]
         print(f"    cup {n}: x={x:.0f} y={y:+.0f}  {math.hypot(x, y) / 10:.0f} cm out, "
-              f"seen {c['sightings']}x" + ("" if c["reachable"] else
-                                           f"  <- too far to drop (max {REACH_MAX_MM / 10:.0f} cm)"))
+              f"seen {c['sightings']}x" + ("" if c["reachable"] else "  <- out of reach"))
+    for n, c in enumerate(cups, 1):              # out-of-reach cups are discarded right away
+        if not c["reachable"]:
+            x, y, z = c["pos_mm"]
+            why = f"out of reach: {math.hypot(x, y) / 10:.0f} cm > {REACH_MAX_MM / 10:.0f} cm"
+            print(f"  DISCARDED cup {n} at x={x:.0f} y={y:+.0f} z={z:.0f} ({why})")
+            detection_log.event("discarded", number=n, cup_mm=c["pos_mm"], why=why,
+                                left=sum(1 for k in cups if k["reachable"]))
     return cups
 
 
@@ -241,8 +255,8 @@ async def run_once(robot, motion, go, home, t0):
         return {"cups": cups, "result": {"hit": False, "failure": "no_cup_found"}}, None
     cup = cups[n - 1]["pos_mm"]
     if not cups[n - 1]["reachable"]:
-        print(f"cup {n} is {math.hypot(cup[0], cup[1]) / 10:.0f} cm out, beyond the "
-              f"{REACH_MAX_MM / 10:.0f} cm drop reach; not picking (move it closer or pick another --cup)")
+        print(f"cup {n} was discarded (out of reach, {math.hypot(cup[0], cup[1]) / 10:.0f} cm); "
+              f"no cup within {REACH_MAX_MM / 10:.0f} cm to use; not picking")
         detection_log.event("target", cup_mm=cup, number=n, of=len(cups), refused="too far")
         return {"cups": cups, "result": {"hit": False, "failure": "cup_out_of_reach"}}, None
     print(f"  target: cup {n} of {len(cups)} at x={cup[0]:.0f} y={cup[1]:+.0f} (rim z={cup[2]:.0f})")
@@ -250,7 +264,12 @@ async def run_once(robot, motion, go, home, t0):
     detection_log.event("target", cup_mm=cup, number=n, of=len(cups))
     cup_doc = {"pos_mm": cup, "frame": "world", "seen_before_pick": True,
                "number": n, "of": len(cups)}
+    return await pick_and_drop(robot, motion, go, cup_doc, cups)
 
+
+async def pick_and_drop(robot, motion, go, cup_doc, cups):
+    """Find a ball near the robot, pick it slowly, drop it at the remembered cup_doc."""
+    cup = cup_doc["pos_mm"]
     print("2) find ball")
     _phase("find_ball")
     detection_log.context("find_ball")
@@ -308,15 +327,16 @@ def _run_config():
             "autotune": "--autotune" in sys.argv}
 
 
-async def attempt(robot, motion, go, home):
-    """One full attempt; always ends at home. Asks hit/miss, logs, returns the document."""
+async def attempt(robot, motion, go, home, body=None):
+    """One full attempt; always ends at home. Asks hit/miss, logs, returns the document.
+    body(t0) -> (doc, state) does the work; default run_once (start check, survey, pick, drop)."""
     global TEL
     t0 = time.monotonic()
     TEL = Telemetry(robot, go)
     TEL.config.update(_run_config())
     log = detection_log.start()
     try:
-        doc, state = await run_once(robot, motion, go, home, t0)
+        doc, state = await (body(t0) if body else run_once(robot, motion, go, home, t0))
     except BaseException as e:  # error or Ctrl+C: never leave the ball hanging
         print(f"!! stopped ({type(e).__name__}: {e}) - opening gripper and going home")
         if go:
@@ -370,6 +390,98 @@ async def run_series(robot, motion, go, home, runs):
     return results
 
 
+MAX_TRIES_PER_CUP = 2   # misses before a cup is given up on
+MAX_PICK_FAILS = 3      # failed picks in a row before stopping
+
+
+def _cup_at(c):
+    x, y, z = c["pos_mm"]
+    return f"x={x:.0f} y={y:+.0f} z={z:.0f}"
+
+
+async def fill_all_cups(robot, motion, go, home):
+    """Stationary cups, several balls near the robot. Survey the cups ONCE, then one ball per
+    cup, nearest cup first. A cup that got its ball is discarded (its location printed) and
+    the next ball goes to the next cup. A miss leaves the cup for the next ball, up to
+    MAX_TRIES_PER_CUP. Stops when every cup is done, no ball is left, or picks keep failing.
+    Returns the list of discarded cups."""
+    print("0) start from the saved home pose")
+    await move_to(motion, home, go, label="home")
+    await release_if_holding(robot, motion, go)
+    await move_to(motion, home, go, label="home")
+
+    session = detection_log.start()          # this folder holds the survey + the cup bookkeeping
+    try:
+        print("1) survey the table ONCE (the cups stay put)")
+        cups = await survey_cups(motion, robot, go)
+    finally:
+        detection_log.stop()
+    targets = [dict(c, number=n) for n, c in enumerate(cups, 1) if c["reachable"]]
+    print(f"  PLAN: {len(targets)} cup(s) to fill, nearest first: "
+          + (", ".join(f"cup {c['number']} ({_cup_at(c)})" for c in targets) or "none"))
+
+    def note(kind, **data):
+        if session:
+            session.event(kind, **data)
+
+    discarded = [{"number": n, "pos_mm": c["pos_mm"], "why": "out of reach"}     # (survey printed these)
+                 for n, c in enumerate(cups, 1) if not c["reachable"]]
+    results, tries, pick_fails = [], Counter(), 0
+
+    def discard(c, why):
+        targets.remove(c)
+        discarded.append({"number": c["number"], "pos_mm": c["pos_mm"], "why": why})
+        print(f"  DISCARDED cup {c['number']} at {_cup_at(c)} ({why}); {len(targets)} cup(s) left"
+              + (": " + ", ".join(f"cup {t['number']} ({_cup_at(t)})" for t in targets) if targets else ""))
+        note("discarded", number=c["number"], cup_mm=c["pos_mm"], why=why, left=len(targets))
+
+    try:
+        while targets:
+            c = targets[0]
+            print(f"\n=== ball {len(results) + 1} -> cup {c['number']} at {_cup_at(c)} "
+                  f"({len(targets)} cup(s) left) ===")
+            cup_doc = {"pos_mm": c["pos_mm"], "frame": "world", "seen_before_pick": True,
+                       "number": c["number"], "of": len(cups)}
+
+            async def body(t0, cup_doc=cup_doc):     # find_ball starts at the look pose itself
+                return await pick_and_drop(robot, motion, go, cup_doc, cups)
+
+            doc = await attempt(robot, motion, go, home, body=body)
+            res = doc.get("result", {})
+            results.append(res)
+            failure = res.get("failure")
+            if failure == "no_ball_found":
+                print("  no ball left near the robot; stopping")
+                break
+            if failure == "grasp_failed":
+                pick_fails += 1
+                if pick_fails >= MAX_PICK_FAILS:
+                    print(f"  {pick_fails} picks failed in a row; stopping")
+                    break
+                continue
+            pick_fails = 0
+            if failure == "cup_out_of_reach":
+                discard(c, "arm can't reach it")
+                continue
+            tries[c["number"]] += 1
+            if res.get("hit") or not go:
+                discard(c, "ball in" if go else "dry run")
+            elif tries[c["number"]] >= MAX_TRIES_PER_CUP:
+                discard(c, f"missed {tries[c['number']]} times, giving up")
+            else:
+                print(f"  missed: cup {c['number']} stays, the next ball tries it again")
+    finally:
+        filled = sum(1 for d in discarded if d["why"] == "ball in")
+        print(f"\nFILL SUMMARY: {filled} cup(s) filled with {len(results)} ball attempt(s); "
+              f"{len(targets)} cup(s) left")
+        for d in discarded:
+            x, y, z = d["pos_mm"]
+            print(f"  cup {d['number']}: x={x:.0f} y={y:+.0f} z={z:.0f}  {d['why']}")
+        note("session", filled=filled, attempts=len(results), left=[t["number"] for t in targets],
+             discarded=discarded)
+    return discarded
+
+
 def _runs():
     if "--runs" not in sys.argv:
         return 1
@@ -389,7 +501,10 @@ async def main():
     robot = await connect()
     try:
         motion = MotionClient.from_robot(robot, "builtin")
-        await run_series(robot, motion, go, home, runs)
+        if "--fill-cups" in sys.argv:
+            await fill_all_cups(robot, motion, go, home)
+        else:
+            await run_series(robot, motion, go, home, runs)
     finally:
         await robot.close()
 

@@ -226,6 +226,11 @@ def _event_lines(l):
     if e == "yolo_vs_rim":
         dx, dy = l["median_offset_mm"]
         return [f"  YOLO vs RIM: rim - YOLO = ({dx:+.0f}, {dy:+.0f}) mm over {l['n']} shared sightings"]
+    if e == "discarded":
+        return [f"  DISCARDED: cup {l['number']} at {_xy(l['cup_mm'])} ({l['why']}), {l['left']} left"]
+    if e == "session":
+        return [f"  FILL SUMMARY: {l['filled']} cup(s) filled in {l['attempts']} attempt(s), "
+                f"cups left: {l['left'] or 'none'}"]
     if e == "result":
         verdict = "HIT" if l.get("hit") else "MISS"
         extra = l.get("failure", "")

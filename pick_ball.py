@@ -94,6 +94,18 @@ BALL_CENTER_Z = -10 + BALL_DIAMETER_MM / 2   # real tabletop (-10) + radius
 # Which ball to pick: "orange" (default, colour finder, the validated path), "white" or "any"
 # (shape finder: depth sphere fit for the first look, circle search for the close-up).
 BALL_COLOR = "orange"
+# Cups found by the survey (main.survey_cups sets this). A ball within AVOID_RADIUS_MM of a
+# cup is in it or right next to it: never picked (the fingers would hit or lift the cup).
+AVOID_XY = []
+AVOID_RADIUS_MM = 90        # cup rim radius 47 + ball radius 20 + margin
+
+
+def near_cup(xy):
+    return any(math.hypot(xy[0] - cx, xy[1] - cy) < AVOID_RADIUS_MM for cx, cy in AVOID_XY)
+
+
+def _skip_near_cup(items, i):
+    items[i].update(kept=False, why="in or next to a cup")
 
 
 async def _frame(cam):
@@ -159,11 +171,20 @@ async def locate_ball_shape(robot, prefer_center=False):
         if not alone:
             detection_log.record("ball_depth", bgr, items, **meta)
             return None
-        b = alone[0]
-        cx, cy, cz = b["center_camera_mm"]
-        w = (await robot.transform_pose(PoseInFrame(reference_frame=CAMERA,
-                                                    pose=Pose(x=cx, y=cy, z=cz)), "world")).pose
-        pos = (w.x, w.y, BALL_CENTER_Z)
+        b = pos = None
+        for cand in alone:
+            cx, cy, cz = cand["center_camera_mm"]
+            w = (await robot.transform_pose(PoseInFrame(reference_frame=CAMERA,
+                                                        pose=Pose(x=cx, y=cy, z=cz)), "world")).pose
+            if near_cup((w.x, w.y)):
+                _skip_near_cup(items, balls.index(cand))
+                continue
+            b, pos = cand, (w.x, w.y, BALL_CENTER_Z)
+            break
+        if b is None:
+            print("  the only balls in view are in or next to cups")
+            detection_log.record("ball_depth", bgr, items, **meta)
+            return None
         _chose(items, balls.index(b), ((pos, None)))
         detection_log.record("ball_depth", bgr, items, sphere_error_mm=b.get("sphere_error_mm"), **meta)
         print(f"  {b['color']} ball (depth fit, err {b['sphere_error_mm']:.1f} mm), "
@@ -186,9 +207,18 @@ async def locate_ball_shape(robot, prefer_center=False):
     if not found:
         detection_log.record("ball_shape", frame, items, **meta)
         return None
-    b = found[0]
-    hit = await _pixel_to_table(robot, k, b["u"], b["v"], BALL_CENTER_Z)
-    _chose(items, 0, hit)
+    b = hit = None
+    for i, cand in enumerate(found):
+        h = await _pixel_to_table(robot, k, cand["u"], cand["v"], BALL_CENTER_Z)
+        if h is not None and near_cup(h[0]):
+            _skip_near_cup(items, i)
+            continue
+        b, hit = cand, h
+        break
+    if b is None:
+        detection_log.record("ball_shape", frame, items, **meta)
+        return None
+    _chose(items, found.index(b), hit)
     detection_log.record("ball_shape", frame, items, **meta)
     if hit is None:
         return None
@@ -239,8 +269,18 @@ async def locate_ball(robot, prefer_center=False):
         return None
     if prefer_center:
         alone.sort(key=lambda b: (b["u"] - k.center_x_px) ** 2 + (b["v"] - k.center_y_px) ** 2)
-    b = alone[0]
-    hit = await _pixel_to_table(robot, k, b["u"], b["v"], BALL_CENTER_Z)
+    b = hit = None
+    for cand in alone:
+        h = await _pixel_to_table(robot, k, cand["u"], cand["v"], BALL_CENTER_Z)
+        if h is not None and near_cup(h[0]):
+            _skip_near_cup(items, balls.index(cand))
+            continue
+        b, hit = cand, h
+        break
+    if b is None:
+        print("  the only balls in view are in or next to cups")
+        detection_log.record("ball_orange", frame, items, **meta)
+        return None
     _chose(items, balls.index(b), hit)
     detection_log.record("ball_orange", frame, items, **meta)
     if hit is None:
@@ -303,8 +343,60 @@ async def slow(robot, go):
         await asyncio.shield(arm.do_command({"set_speed": NORMAL_SPEED_DEG_S}))
 
 
+PICK_RETRIES = 3            # after a missed grab: go up, look again, retry this many times
+LOOK_AGAIN_MAX_MM = 100     # a ball farther than this from the missed spot is not "the" ball
+
+
 async def pick(robot, ball, go):
-    """Pick the ball at (x, y, _). Returns True if it's in the gripper after lifting."""
+    """Pick the ball at (x, y, _). Returns True if it's in the gripper after lifting.
+    A missed grab (closed on nothing, fingers landed on something, or the ball slipped out
+    on the lift): open, go up, center the camera over the spot, and if the ball is still
+    there grab again, up to PICK_RETRIES times. Ends open and up if it gives up."""
+    held = await grab_at(robot, ball, go)
+    for retry in range(1, PICK_RETRIES + 1):
+        if not go or held:
+            return held
+        print(f"  missed the ball; going up to look again (retry {retry}/{PICK_RETRIES})")
+        detection_log.context(f"pick_retry_{retry}")
+        ball = await look_again(robot, ball, go)
+        if ball is None:
+            return False
+        held = await grab_at(robot, ball, go)
+    if go and not held:
+        print(f"  still no ball after {PICK_RETRIES} retries; giving up on it")
+        await _open_and_lift(robot, ball, go)
+    return held
+
+
+async def _open_and_lift(robot, ball, go):
+    await Gripper.from_robot(robot, GRIPPER).open()
+    await move(MotionClient.from_robot(robot, "builtin"), ball[0], ball[1], HOVER_Z, go)
+
+
+async def look_again(robot, ball, go):
+    """After a miss: open, lift straight up (fingers clear of the ball), put the camera
+    over the spot and re-measure. Returns the corrected ball position, or None if no ball
+    is there any more (rolled away, or it was never a ball)."""
+    motion = MotionClient.from_robot(robot, "builtin")
+    await _open_and_lift(robot, ball, go)
+    await move(motion, ball[0] - CAM_CORRECTION_MM[0] + CAM_OFFSET_XY[0],
+               ball[1] - CAM_CORRECTION_MM[1] + CAM_OFFSET_XY[1], MEASURE_HEIGHT_Z, go)
+    seen = await locate_ball(robot, prefer_center=True)
+    if seen is None:
+        print("  no ball under the camera any more")
+        return None
+    x, y, z = seen[0] + CAM_CORRECTION_MM[0], seen[1] + CAM_CORRECTION_MM[1], seen[2]
+    moved = math.hypot(x - ball[0], y - ball[1])
+    if moved > LOOK_AGAIN_MAX_MM:
+        print(f"  nearest ball is {moved:.0f} mm from the missed spot; not the same ball")
+        return None
+    print(f"  ball still there, {moved:.0f} mm from the last try: ({x:.0f}, {y:.0f})")
+    return (x, y, z)
+
+
+async def grab_at(robot, ball, go):
+    """One grab at (x, y, _): hover, slowly down, close, slowly up. True if holding.
+    On a miss the gripper may be left closed and low; pick() / look_again() recover."""
     motion = MotionClient.from_robot(robot, "builtin")
     gripper = Gripper.from_robot(robot, GRIPPER)
     x, y, _ = ball

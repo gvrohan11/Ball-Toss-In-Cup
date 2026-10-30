@@ -14,6 +14,7 @@ python pick_and_throw.py --distance 1100 --scale 0.3 --go --i-checked-with-staff
 python main.py --go --autotune   # also correct the aim from recent misses stored in Atlas
 python main.py --go --runs 10    # 10 attempts in a row (cups surveyed + remembered first), prints N/10
 python main.py --go --cup 2      # several cups: drop into cup 2 of the survey list (1 = nearest)
+python main.py --go --fill-cups  # several balls + stationary cups: one ball per cup, filled cups discarded
 python main.py --go --ball white # pick a WHITE ball instead (or --ball any); default is orange. Put it alone on flat table, not in a bowl
 python detection_log.py          # what the camera saw + detected in the last attempt (observations/detections/)
 python dashboard.py --watch      # live hit-rate dashboard from Atlas (second screen)

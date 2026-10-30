@@ -53,6 +53,13 @@ class FakeGripper:
 
 
 @pytest.fixture(autouse=True)
+def no_keep_out(monkeypatch):
+    """survey_cups sets pick_ball.AVOID_XY; keep each test's survey to itself. No settle wait."""
+    monkeypatch.setattr(pick_ball, "AVOID_XY", [])
+    monkeypatch.setattr(main, "VIEW_SETTLE_S", 0)
+
+
+@pytest.fixture(autouse=True)
 def det_log_dir(tmp_path, monkeypatch):
     """Detection logs from these tests go to a temp folder, not observations/."""
     import detection_log
@@ -188,9 +195,10 @@ def test_cup_number_beyond_survey_never_picks(rig, monkeypatch):
 
 def test_merge_sightings():
     near = [(600, 0, 110), (610, 5, 110), (590, -5, 110)]      # one cup seen 3x
-    other = [(600, 120, 110), (604, 118, 110)]                  # a neighbor ~12 cm away
-    cups = main.merge_sightings(near + other + [(900, 300, 110)])   # + a one-off glint
-    assert [c["sightings"] for c in cups] == [3, 2]
+    other = [(600, 120, 110), (604, 118, 110), (602, 121, 110)]   # a neighbor ~12 cm away
+    stray = [(900, 300, 110), (905, 302, 110)]                     # seen only twice: noise
+    cups = main.merge_sightings(near + other + stray)
+    assert [c["sightings"] for c in cups] == [3, 3]
     assert cups[0]["pos_mm"] == (600, 0, 110)
 
 
@@ -301,6 +309,79 @@ def test_pick_goes_down_and_lifts_slowly(pick_rig):
                             (420, 10, pick_ball.GRAB_Z, slow),        # descend slowly
                             (420, 10, pick_ball.HOVER_Z, slow)]       # lift slowly
     assert arm.speed == normal                                        # restored
+
+
+@pytest.fixture
+def missing(pick_rig, monkeypatch):
+    """pick_rig whose first `misses` grabs close on nothing; locate_ball answers from `sightings`."""
+    arm, grip, motion = pick_rig
+    state = {"misses": 0, "sightings": []}
+    real_grab = grip.grab
+
+    async def grab():
+        if state["misses"] > 0:
+            state["misses"] -= 1
+            grip.pos = -2                                  # closed on nothing
+            grip.events.append("grab")
+            return False
+        return await real_grab()
+
+    async def locate(robot, prefer_center=False):
+        return state["sightings"].pop(0) if state["sightings"] else None
+
+    async def no_wait(*a):
+        return None
+
+    grip.grab = grab
+    monkeypatch.setattr(pick_ball, "locate_ball", locate)
+    monkeypatch.setattr(pick_ball.asyncio, "sleep", no_wait)     # wait_gripper polls fast
+    return grip, motion, state
+
+
+def _measure_moves(motion):
+    return [m for m in motion.moves if m[2] == pick_ball.MEASURE_HEIGHT_Z]
+
+
+def test_missed_grab_looks_again_and_retries(missing):
+    grip, motion, state = missing
+    state["misses"] = 2
+    cx, cy = pick_ball.CAM_CORRECTION_MM
+    state["sightings"] = [(425 - cx, 12 - cy, 15), (428 - cx, 14 - cy, 15)]   # camera sees it again
+    assert asyncio.run(pick_ball.pick(object(), (420, 10, 15), True)) is True
+    assert grip.events.count("grab") == 3
+    assert len(_measure_moves(motion)) == 2                    # went up and looked, twice
+    assert (428, 14, pick_ball.GRAB_Z) == motion.moves[-2][:3]  # last grab at the re-measured spot
+
+
+def test_missed_grab_ball_gone_gives_up(missing):
+    grip, motion, state = missing
+    state["misses"] = 1                                        # and nothing under the camera after
+    assert asyncio.run(pick_ball.pick(object(), (420, 10, 15), True)) is False
+    assert grip.events.count("grab") == 1 and grip.events[-1] == "open"
+
+
+def test_missed_grab_other_ball_far_away_is_not_chased(missing):
+    grip, motion, state = missing
+    state["misses"] = 1
+    state["sightings"] = [(600, 200, 15)]                      # a different ball, 25 cm away
+    assert asyncio.run(pick_ball.pick(object(), (420, 10, 15), True)) is False
+    assert grip.events.count("grab") == 1
+
+
+def test_missed_grab_gives_up_after_three_retries_open_and_up(missing):
+    grip, motion, state = missing
+    state["misses"] = 99
+    cx, cy = pick_ball.CAM_CORRECTION_MM
+    state["sightings"] = [(420 - cx, 10 - cy, 15)] * 5
+    assert asyncio.run(pick_ball.pick(object(), (420, 10, 15), True)) is False
+    assert grip.events.count("grab") == 1 + pick_ball.PICK_RETRIES
+    assert grip.events[-1] == "open" and motion.moves[-1][2] == pick_ball.HOVER_Z
+
+
+def test_dry_run_pick_does_not_retry(missing):
+    grip, motion, state = missing
+    assert asyncio.run(pick_ball.pick(object(), (420, 10, 15), False)) is None
+    assert not _measure_moves(motion)
 
 
 def test_pick_restores_speed_on_error(pick_rig):
@@ -490,3 +571,108 @@ def test_rim_beyond_reach_is_ignored(monkeypatch):
     monkeypatch.setattr(cup_aim, "_pixel_to_table", pix)
     cup = asyncio.run(cup_aim.find_cup_by_rim(object()))
     assert cup is not None and round(cup[0]) == 729 - 52
+
+
+# ---------- --fill-cups: stationary cups, several balls, one ball per cup ----------
+@pytest.fixture
+def fill(rig, monkeypatch):
+    """rig + scripted hit/miss answers; returns (motion, grip, answers, logged, surveys)."""
+    import telemetry
+    motion, grip = rig
+    answers, logged, surveys = [], [], []
+    real_survey = main.survey_cups
+
+    async def survey(m, robot, go):
+        surveys.append(1)
+        return await real_survey(m, robot, go)
+
+    monkeypatch.setattr(main, "find_cups", three_cups)
+    monkeypatch.setattr(main, "survey_cups", survey)
+    monkeypatch.setattr(main, "TEL", None)
+    monkeypatch.setattr(main, "Telemetry", lambda r, go: telemetry.Telemetry(None, go))
+    monkeypatch.setattr(main, "log_attempt", logged.append)
+    monkeypatch.setattr(main, "ask_result", lambda: answers.pop(0))
+    return motion, grip, answers, logged, surveys
+
+
+def released_at(motion):
+    return [(x, y) for x, y, z in motion.moves if z == 300]          # rim 110 + 190
+
+
+def test_fill_cups_one_ball_per_cup_nearest_first(fill, capsys):
+    motion, grip, answers, logged, surveys = fill
+    answers += [(True, None)] * 3
+    done = asyncio.run(main.fill_all_cups(object(), motion, True, HOME))
+    assert surveys == [1]                                             # cups surveyed ONCE
+    assert [d["number"] for d in done] == [1, 2, 3] and all(d["why"] == "ball in" for d in done)
+    assert grip.events.count("grab") == 3 and len(logged) == 3
+    nearest_first = [d["pos_mm"][:2] for d in done]
+    assert [(round(x), round(y)) for x, y in released_at(motion)] == \
+        [(round(x), round(y)) for x, y in nearest_first]
+    out = capsys.readouterr().out
+    x, y, z = done[0]["pos_mm"]
+    assert f"DISCARDED cup 1 at x={x:.0f} y={y:+.0f} z={z:.0f} (ball in); 2 cup(s) left" in out
+    assert "FILL SUMMARY: 3 cup(s) filled with 3 ball attempt(s); 0 cup(s) left" in out
+
+
+def test_fill_cups_miss_retries_then_gives_up(fill):
+    motion, grip, answers, logged, surveys = fill
+    answers += [(False, None), (False, {"x": 20, "y": 0}), (True, None), (True, None)]
+    done = asyncio.run(main.fill_all_cups(object(), motion, True, HOME))
+    assert [(d["number"], d["why"]) for d in done] == \
+        [(1, "missed 2 times, giving up"), (2, "ball in"), (3, "ball in")]
+    assert grip.events.count("grab") == 4
+
+
+def test_fill_cups_stops_when_no_ball_is_left(fill, monkeypatch):
+    motion, grip, answers, logged, surveys = fill
+    answers += [(True, None)]
+    balls = iter([(420.0, 10.0, 15.0)])
+
+    async def one_ball(robot, m, go):
+        return next(balls, None)
+
+    monkeypatch.setattr(main, "find_ball", one_ball)
+    done = asyncio.run(main.fill_all_cups(object(), motion, True, HOME))
+    assert [d["number"] for d in done] == [1] and logged[-1]["result"]["failure"] == "no_ball_found"
+
+
+def test_fill_cups_skips_cups_out_of_reach(fill, monkeypatch, capsys):
+    motion, grip, answers, logged, surveys = fill
+    monkeypatch.setattr(main, "REACH_MAX_MM", 750)                   # only the 60 and 73 cm cups
+    answers += [(True, None)] * 2
+    done = asyncio.run(main.fill_all_cups(object(), motion, True, HOME))
+    assert [(d["number"], d["why"]) for d in done] == [(3, "out of reach"), (1, "ball in"), (2, "ball in")]
+    assert grip.events.count("grab") == 2                            # no ball spent on cup 3
+    out = capsys.readouterr().out
+    assert "DISCARDED cup 3 at x=820 y=+150 z=110 (out of reach: 83 cm > 75 cm)" in out
+    assert "PLAN: 2 cup(s) to fill" in out
+
+
+def test_fill_cups_survey_sets_keep_out_zones(fill):
+    motion, grip, answers, logged, surveys = fill
+    answers += [(True, None)] * 3
+    asyncio.run(main.fill_all_cups(object(), motion, True, HOME))
+    assert len(pick_ball.AVOID_XY) == 3 and pick_ball.near_cup((600, 5)) and not pick_ball.near_cup((420, 10))
+
+
+def test_fill_cups_dry_run_walks_every_cup(fill):
+    motion, grip, answers, logged, surveys = fill
+    done = asyncio.run(main.fill_all_cups(object(), motion, False, HOME))
+    assert [d["why"] for d in done] == ["dry run"] * 3 and not logged   # nothing asked, nothing logged
+
+
+def test_normal_run_discards_out_of_reach_cups(rig, monkeypatch, capsys, det_log_dir):
+    motion, grip = rig
+
+    async def near_and_far(robot, topdown=False):
+        return [(700.0, 0.0, 110.0), (1250.0, -96.0, 110.0)]
+
+    import detection_log
+    log = detection_log.start()
+    doc, state = run(motion, None, monkeypatch, cups_fn=near_and_far)
+    out = capsys.readouterr().out
+    assert "DISCARDED cup 2 at x=1250 y=-96 z=110 (out of reach: 125 cm > 95 cm)" in out
+    assert state == "dropped" and doc["cup"]["pos_mm"] == (700.0, 0.0, 110.0)
+    events = [json.loads(s) for s in (log.dir / "log.jsonl").read_text().splitlines() if '"event"' in s]
+    assert [e["event"] for e in events][:3] == ["survey", "discarded", "target"]

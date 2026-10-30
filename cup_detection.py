@@ -45,9 +45,11 @@ DEFAULT_CONFIG = ROOT / "config" / "cup-detector.thresholds.json"
 # Accept a cup only if the model is this sure and the fitted rim looks like a cup opening.
 MIN_CONFIDENCE = 0.30
 RIM_DIAMETER_OK_MM = (60, 130)   # a red solo cup opening is ~95 mm
-# Camera calibration correction (truth - measured), world mm. Measure on a real cup and
-# update; the ball picks at theta=180 needed (-15, +20) for the same camera.
-CUP_CORRECTION_MM = (0.0, 0.0)
+# Calibration (rim - YOLO), world mm: the median offset to the drop-calibrated rim method
+# over 163 shared sightings in 4 surveys on sfhack11 (Oct 29), each survey giving
+# (-54, +20..+22). Uncorrected, YOLO-only sightings landed ~58 mm from the rim position
+# and the survey listed the same cup twice. Each survey prints "YOLO vs rim" to re-check.
+CUP_CORRECTION_MM = (-54.0, 22.0)
 TABLE_Z_MM = -10       # real tabletop height (cup_aim.TABLE_Z)
 CUP_RADIUS_MM = 47     # solo cup rim radius
 
