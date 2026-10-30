@@ -35,11 +35,27 @@ ARM, GRIPPER = "arm", "gripper"
 NORMAL_SPEED = 60            # deg/s, the config value
 THROW_SPEED = 150            # deg/s, module max is 180
 THROW_ACCEL = 900            # deg/s^2, module max is 1145
-SWING_DEG = {2: -35, 4: -45}  # joint index -> forward swing (J3 elbow, J5 wrist), degrees
+# joint index -> forward swing (J3 elbow, J5 wrist), degrees. Directions MEASURED on the real arm
+# at WIND_UP (Oct 29): J3 negative lifts the gripper up and forward (-15 deg: +94 mm x, +198 mm z);
+# J5 NEGATIVE tilts the gripper BACKWARD (-15 deg: tilt -0.5 -> -0.71), so a forward flick is J5 positive.
+SWING_DEG = {2: -35, 4: +45}
+# xArm850 joint limits, degrees (UFactory spec). A swing that leaves them is refused, not clipped.
+JOINT_LIMITS_DEG = {0: (-360, 360), 1: (-132, 120), 2: (-242, 3.5), 3: (-360, 360),
+                    4: (-124, 124), 5: (-360, 360)}
+LIMIT_MARGIN_DEG = 5
 # release delay after the swing starts, per target distance (mm) - placeholders to tune
 RELEASE_TABLE = [(900, 0.16), (1100, 0.20), (1300, 0.24)]
 WIND_UP = dict(x=300, y=0, z=450, o_x=-0.5, o_y=0, o_z=-0.866, theta=180)
 HOME = dict(x=350, y=0, z=445, o_x=0, o_y=0, o_z=-1, theta=180)
+
+
+def check_limits(start, end):
+    """Raise if any joint of `end` is outside its limit (with a margin)."""
+    for j, v in enumerate(end):
+        lo, hi = JOINT_LIMITS_DEG[j]
+        if not lo + LIMIT_MARGIN_DEG <= v <= hi - LIMIT_MARGIN_DEG:
+            raise ValueError(f"swing leaves joint J{j + 1} limit: {start[j]:.1f} -> {v:.1f} "
+                             f"(allowed {lo + LIMIT_MARGIN_DEG}..{hi - LIMIT_MARGIN_DEG})")
 
 
 def release_delay(distance_mm):
@@ -52,7 +68,11 @@ def release_delay(distance_mm):
     return pts[-1][1]
 
 
-async def throw(robot, distance_mm, go):
+async def throw(robot, distance_mm, go, scale=1.0, release=True):
+    """scale (0.1..1) shrinks the swing angles AND the speed: use 0.2-0.3 first, empty gripper,
+    release=False, to watch the motion before any real throw."""
+    if not 0.1 <= scale <= 1.0:
+        raise ValueError("--scale must be between 0.1 and 1")
     motion = MotionClient.from_robot(robot, "builtin")
     arm, gripper = Arm.from_robot(robot, ARM), Gripper.from_robot(robot, GRIPPER)
     delay = release_delay(distance_mm)
@@ -64,28 +84,35 @@ async def throw(robot, distance_mm, go):
     start = list((await arm.get_joint_positions()).values) if go else [0.0] * 6
     end = list(start)
     for j, d in SWING_DEG.items():
-        end[j] += d
+        end[j] += d * scale
+    check_limits(start, end)
+    speed, accel = max(20, THROW_SPEED * scale), max(100, THROW_ACCEL * scale)
     print(f"2) swing joints {[round(v, 1) for v in start]} -> {[round(v, 1) for v in end]} "
-          f"at {THROW_SPEED} deg/s, release after {delay * 1000:.0f} ms (target {distance_mm} mm)")
+          f"at {speed:.0f} deg/s, " + (f"release after {delay * 1000:.0f} ms" if release else "NO release")
+          + f" (target {distance_mm} mm, scale {scale})")
     if not go:
         return {"distance_mm": distance_mm, "release_delay_s": delay, "dry_run": True}
     try:
-        await arm.do_command({"set_speed": THROW_SPEED, "set_acceleration": THROW_ACCEL})
+        await arm.do_command({"set_speed": speed, "set_acceleration": accel})
         swing = asyncio.create_task(arm.move_to_joint_positions(JointPositions(values=end)))
-        await asyncio.sleep(delay)
-        await gripper.open()
+        if release:
+            await asyncio.sleep(delay)
+            await gripper.open()
         await swing
     finally:
         await arm.do_command({"set_speed": NORMAL_SPEED})
         print("3) speed restored")
     await motion.move(GRIPPER, PoseInFrame(reference_frame="world", pose=Pose(**HOME)))
     return {"distance_mm": distance_mm, "release_delay_s": delay,
-            "throw_speed": THROW_SPEED, "swing_deg": SWING_DEG}
+            "throw_speed": speed, "swing_deg": SWING_DEG, "scale": scale, "released": release}
 
 
 async def _main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--distance", type=float, required=True, help="cup distance from base, mm")
+    ap.add_argument("--scale", type=float, default=1.0,
+                    help="0.1-1: shrink swing angles and speed (use 0.2-0.3 for the first live look)")
+    ap.add_argument("--no-release", action="store_true", help="swing but never open the gripper")
     ap.add_argument("--go", action="store_true")
     ap.add_argument("--i-checked-with-staff", action="store_true")
     a = ap.parse_args()
@@ -94,7 +121,7 @@ async def _main():
         print("Refusing to throw live without --i-checked-with-staff (direct joint move, no obstacle checks).")
     robot = await connect()
     try:
-        print(await throw(robot, a.distance, go))
+        print(await throw(robot, a.distance, go, a.scale, not a.no_release))
     finally:
         await robot.close()
 
