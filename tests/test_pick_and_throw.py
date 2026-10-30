@@ -193,35 +193,36 @@ def test_aim_cup_refuses_when_no_cup_is_in_the_band(rig, monkeypatch):
     assert plans == []
 
 
-def test_aim_cup_targets_nearest_cup_in_the_band_and_logs_it(rig, monkeypatch):
-    # 600 mm: too close for FAR's band; 880/90 and 950/-200 are in it -> nearest in-band = 885 mm
+def test_aim_cup_targets_most_straight_ahead_cup_in_the_band_and_logs_it(rig, monkeypatch):
+    # 600 mm: too close for FAR's band; 880/90 (6 deg left) and 950/-200 (12 deg right) are in it
+    # -> the one closest to straight ahead = 880/90; numbered right->left: (950,-200)=1, (600,0)=2, (880,90)=3
     calls = fake_survey(monkeypatch, [(600.0, 0.0, 100.0), (950.0, -200.0, 100.0), (880.0, 90.0, 100.0)])
     plans, logged = recorder(monkeypatch, [{"hit": False, "long_cm": 5, "outcome": "long"}])
     asyncio.run(pt.run(args(aim_cup=True, distance=None)))
     assert "far band" in calls[0]
     assert len(plans) == 1 and plans[0]["yaw_deg"] > 0 and abs(plans[0]["distance_mm"] - 885) < 2
-    assert logged[0]["cup"]["dist_mm"] == 885 and logged[0]["cup"]["number"] == 2 and logged[0]["cup"]["of"] == 3
+    assert logged[0]["cup"]["dist_mm"] == 885 and logged[0]["cup"]["number"] == 3 and logged[0]["cup"]["of"] == 3
 
 
 def test_cup_n_picks_that_cup(rig, monkeypatch):
     fake_survey(monkeypatch, [(880.0, 90.0, 100.0), (950.0, -200.0, 100.0)])
     plans, logged = recorder(monkeypatch, [{"hit": True, "outcome": "in"}])
-    asyncio.run(pt.run(args(aim_cup=True, distance=None, cup=2)))
-    assert plans[0]["yaw_deg"] < 0 and logged[0]["cup"]["number"] == 2
+    asyncio.run(pt.run(args(aim_cup=True, distance=None, cup=1)))       # cup 1 = rightmost = (950,-200)
+    assert plans[0]["yaw_deg"] < 0 and logged[0]["cup"]["number"] == 1
 
 
 def test_fill_cups_never_reuses_a_filled_cup_and_counts_lucky_cups(rig, monkeypatch):
     arc = [(950.0, -250.0, 100.0), (980.0, 0.0, 100.0), (950.0, 250.0, 100.0)]   # cradle band
     fake_survey(monkeypatch, arc)
-    answers = [{"hit": True, "outcome": "in"},                       # cup 1 (nearest) filled
-               {"hit": True, "outcome": "in", "cup_number": 3},      # aimed at cup 2, went into cup 3
+    answers = [{"hit": True, "outcome": "in"},                       # cup 1 (rightmost) filled
+               {"hit": True, "outcome": "in", "cup_number": 3},      # aimed at cup 2 (middle), went into cup 3
                {"hit": False, "long_cm": 4, "outcome": "long"},      # cup 2 miss
                {"hit": True, "outcome": "in"}]                       # cup 2 filled
     plans, logged = recorder(monkeypatch, answers)
     asyncio.run(pt.run(args(fill_cups=True, cradle=True, distance=None)))
     aimed = [round(p["yaw_deg"]) for p in plans]
     assert len(plans) == 4
-    assert aimed == [0, -15, -15, -15]     # cup 1 (straight), then cup 2 only: 1 and 3 are filled
+    assert aimed == [-15, 0, 0, 0]         # right to left: cup 1, then cup 2 only (1 and 3 are filled)
     assert {d["cup"]["number"] for d in logged} == {1, 2}
     assert all(p["preset"] == "cradle" for p in plans)
 
