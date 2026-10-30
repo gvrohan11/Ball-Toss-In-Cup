@@ -45,3 +45,7 @@ def test_scale_validated_and_dry_run_moves_nothing(monkeypatch):
 def test_release_delay_interpolates():
     assert throw.release_delay(1000) == pytest.approx(0.18)
     assert throw.release_delay(500) == 0.16 and throw.release_delay(2000) == 0.24
+
+
+def test_wind_up_does_not_turn_the_wrist():
+    assert throw.WIND_UP["theta"] == 0      # theta=180 spun J6 by 180 deg before every throw

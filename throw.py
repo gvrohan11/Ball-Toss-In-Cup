@@ -45,7 +45,10 @@ JOINT_LIMITS_DEG = {0: (-360, 360), 1: (-132, 120), 2: (-242, 3.5), 3: (-360, 36
 LIMIT_MARGIN_DEG = 5
 # release delay after the swing starts, per target distance (mm) - placeholders to tune
 RELEASE_TABLE = [(900, 0.16), (1100, 0.20), (1300, 0.24)]
-WIND_UP = dict(x=300, y=0, z=450, o_x=-0.5, o_y=0, o_z=-0.866, theta=180)
+# theta=0 on purpose: with theta=180 the planner turned the wrist (J6) from ~0 to -180, a visible
+# half turn before every throw. Same position/tilt/joints J1-J5 (checked on the real arm Oct 29);
+# only the wrist angle differs, and the swing uses J3/J5 only.
+WIND_UP = dict(x=300, y=0, z=450, o_x=-0.5, o_y=0, o_z=-0.866, theta=0)
 HOME = dict(x=350, y=0, z=445, o_x=0, o_y=0, o_z=-1, theta=180)
 
 
