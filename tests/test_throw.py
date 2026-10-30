@@ -188,3 +188,14 @@ def test_partial_open_uses_set_not_open(fake):
     asyncio.run(throw.throw(object(), pl, True, partial=True))
     assert ("open",) not in fake
     assert ("grip_cmd", {"set": float(372 + throw.PARTIAL_OPEN_DELTA)}) in fake
+
+
+def test_roll_tilt_and_open_overrides(fake):
+    pl = throw.plan(960, "cradle", roll=0.0, tilt_up=8.0, cradle_open=40)
+    assert pl["j6"] == 0.0 and pl["start_j"][4] == throw.CRADLE["start_j"][2] + 8.0 and pl["cradle_open"] == 40
+    asyncio.run(throw.throw(object(), pl, True, check_only=True))
+    wind = [e for e in fake if e[0] == "move"][0][1]
+    assert wind[5] == 0.0 and abs(wind[4] - (throw.CRADLE["start_j"][2] + 8.0)) < 0.05
+    assert ("grip_cmd", {"set": 412.0}) in fake
+    with pytest.raises(ValueError):
+        throw.plan(960, "cradle", tilt_up=40)
