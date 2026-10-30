@@ -1,4 +1,4 @@
-"""Viam local-module entry point: python -m cup_detection SOCKET_PATH."""
+"""Viam local-module entry point: python -m cup_vision SOCKET_PATH."""
 import asyncio
 
 from viam.module.module import Module

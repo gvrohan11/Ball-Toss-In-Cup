@@ -6,7 +6,7 @@ from unittest.mock import patch
 import cv2
 import numpy as np
 
-from cup_detection.core import CupDetection, CupDetector, DetectorConfig, _masks
+from cup_vision.core import CupDetection, CupDetector, DetectorConfig, _masks
 
 
 def overhead_cup(center=(160, 120), pink=True):

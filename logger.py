@@ -8,14 +8,18 @@ Setup:
     pip install pymongo
     put MONGODB_URI=mongodb+srv://... in .env   (the event's Atlas cluster)
 
-Without MONGODB_URI it only prints, so the robot loop never breaks because of logging.
+Without MONGODB_URI (or if Atlas is down) each attempt is saved as readable JSON instead
+(observations/detections/<attempt>/attempt.json, or observations/attempts/), so the robot
+loop never breaks because of logging.
 Schema: see TASKS.md (collection balltoss.attempts).
 
     python logger.py            # insert one test doc and print the stats
 """
+import json
 import os
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -44,7 +48,7 @@ def _get_collection():
         col.create_index("session")
         _collection = col
     except Exception as e:  # never let logging crash the robot
-        print(f"  [log] MongoDB unavailable ({e}); printing instead")
+        print(f"  [log] MongoDB unavailable ({str(e)[:80]}); saving locally instead")
         return None
     return _collection
 
@@ -60,21 +64,61 @@ def _jsonable(v):
     return v
 
 
+LOCAL_DIR = Path(__file__).resolve().parent / "observations" / "attempts"
+
+
+def _readable(v):
+    """For the local JSON copy: binary thumbnails -> a size note, floats rounded."""
+    if isinstance(v, dict):
+        return {k: _readable(x) for k, x in v.items()}
+    if isinstance(v, list):
+        return [_readable(x) for x in v]
+    if isinstance(v, (bytes, bytearray)):
+        return f"<{len(v)} bytes jpeg>"
+    if isinstance(v, float):
+        return round(v, 1)
+    if isinstance(v, datetime):
+        return v.isoformat()
+    return v
+
+
+def save_local(doc):
+    """Write the attempt as readable JSON: into its detection-log folder when it has one,
+    else observations/attempts/. Returns the path, or None if it can't be written."""
+    try:
+        folder = doc.get("detection_log")
+        if folder and Path(folder).is_dir():
+            path = Path(folder) / "attempt.json"
+        else:
+            LOCAL_DIR.mkdir(parents=True, exist_ok=True)
+            path = LOCAL_DIR / f"{datetime.now():%Y%m%d-%H%M%S}_{doc['attempt_id'][:8]}.json"
+        path.write_text(json.dumps(_readable(doc), indent=2, default=str) + "\n")
+        return path
+    except Exception as e:
+        print(f"  [log] couldn't save locally either ({e})")
+        return None
+
+
 def log_attempt(doc):
-    """Store one attempt. Adds attempt_id, timestamp and session. Returns the stored doc."""
+    """Store one attempt. Adds attempt_id, timestamp and session. Returns the stored doc.
+    Without Atlas (no MONGODB_URI, or it's down) the attempt is saved as a local JSON file."""
     doc = _jsonable(dict(doc))
     doc.setdefault("attempt_id", str(uuid.uuid4()))
     doc.setdefault("timestamp", datetime.now(timezone.utc))
     doc.setdefault("session", SESSION)
+    hit = doc.get("result", {}).get("hit")
     col = _get_collection()
-    if col is None:
-        print("  [log, not saved - no MONGODB_URI]", doc)
-        return doc
-    try:
-        col.insert_one(dict(doc))
-        print(f"  [log] saved attempt {doc['attempt_id'][:8]} hit={doc.get('result', {}).get('hit')}")
-    except Exception as e:
-        print(f"  [log] insert failed ({e})", doc)
+    if col is not None:
+        try:
+            col.insert_one(dict(doc))
+            print(f"  [log] saved attempt {doc['attempt_id'][:8]} to Atlas, hit={hit}")
+            return doc
+        except Exception as e:
+            print(f"  [log] Atlas insert failed ({str(e)[:80]})")
+    path = save_local(doc)
+    if path:
+        why = "no MONGODB_URI" if not os.getenv("MONGODB_URI") else "Atlas unavailable"
+        print(f"  [log] {why}: saved attempt locally, hit={hit} -> {path}")
     return doc
 
 

@@ -13,8 +13,8 @@ from viam.proto.app.robot import ComponentConfig
 from viam.proto.common import ResponseMetadata
 from viam.utils import dict_to_struct
 
-from cup_detection.core import CupDetection
-from cup_detection.service import RedSoloCupVision
+from cup_vision.core import CupDetection
+from cup_vision.service import RedSoloCupVision
 
 
 class PairedCamera:

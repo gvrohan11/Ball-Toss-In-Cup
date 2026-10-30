@@ -21,6 +21,9 @@ RELEASE_ABOVE_RIM_MM = 190   # worked: z=300 with the rim at ~110
 OFFSET_X_MM = 0              # tune from hit/miss data
 OFFSET_Y_MM = 0
 STRAIGHT_DOWN_MAX_X_MM = 650  # beyond this, tilt forward to reach
+# Furthest cup (distance from the arm base) the tilted drop can reach. Hits at 82 and 87 cm;
+# a cup at 100 cm failed planning on sfhack11 (Oct 29). main.py refuses farther cups BEFORE picking.
+REACH_MAX_MM = 950
 
 # The exact pose that put the ball in the cup on the first try.
 FIRST_HIT_POSE = dict(x=870, y=20, z=300, o_x=0.7, o_y=0, o_z=-0.7, theta=180)
