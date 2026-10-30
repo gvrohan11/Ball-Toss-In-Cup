@@ -54,6 +54,8 @@ async def run(args):
         yaw = args.yaw
         if args.aim_cup:
             from main import scan_for_cup
+            import cup_aim
+            cup_aim.MAX_CUP_REACH_MM = 1150   # throws can go past the arm's drop reach (cup seen at 955 mm)
             print("0) find cup (to aim the lob)")
             cup = await scan_for_cup(motion, robot, go)
             if cup is None:
