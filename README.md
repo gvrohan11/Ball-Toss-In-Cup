@@ -26,7 +26,8 @@ python main.py --go --cup 2      # several cups: drop into cup 2 of the survey l
 python main.py --go --fill-cups  # several balls + stationary cups: one ball per cup, filled cups discarded
 python main.py --go --ball white # pick a WHITE ball instead (or --ball any); default is orange. Put it alone on flat table, not in a bowl
 python detection_log.py          # what the camera saw + detected in the last attempt (observations/detections/)
-python dashboard.py --watch      # live hit-rate dashboard from Atlas (second screen)
+python dashboard_web.py          # LIVE demo dashboard from Atlas on http://localhost:8765 (run on the laptop, second screen)
+python dashboard.py --watch      # older static hit-rate page
 python -m pytest -q tests        # offline tests, no robot
 ```
 

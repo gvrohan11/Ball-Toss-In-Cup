@@ -1,5 +1,7 @@
 # 2-minute demo script — Ball Toss In Cup (sfhack11)
 
+**Dashboard:** on the laptop, `python dashboard_web.py --hours 1` (only the demo-time throws) → second screen.
+
 **Setup before going on:** ball near the robot, cup upright 70–95 cm out, Atlas dashboard on a
 second screen, `python main.py --go --autotune` ready, someone on the E-stop. Backup: the video.
 

@@ -160,7 +160,9 @@ async def throw_at(robot, motion, args, go, pl, cup, t0):
     cup_doc = None
     if cup is not None:
         cup_doc = {"number": cup.get("number"), "pos_mm": list(cup["pos_mm"]), "dist_mm": round(_dist(cup)),
-                   "of": cup.get("of")}
+                   "of": cup.get("of"),
+                   # the whole survey, numbered right -> left, so the dashboard can draw every cup
+                   "survey": [[round(v) for v in c["pos_mm"][:2]] for c in cup.get("survey", [])]}
     doc = {"phase": "throw", "ball": {"pos_mm": ball}, "cup": cup_doc, "throw": info,
            "duration_s": round(time.monotonic() - t0, 1), "result": landing}
     try:
@@ -242,6 +244,7 @@ async def run(args):
         await move_to(motion, HOME, go, "home")
         for c in cups:
             c["of"] = len(cups)
+            c["survey"] = cups
         targets = [c for c in cups if c["reachable"]]
         if args.survey_only:
             print(f"SURVEY ONLY: {len(cups)} cup(s), {len(targets)} in the {preset} band: "
