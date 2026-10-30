@@ -1,53 +1,62 @@
-# 2-minute demo script — Ball Toss In Cup (sfhack11)
+# 5-minute demo — Ball Toss In Cup (sfhack11)
 
-**Dashboard:** on the laptop, `python dashboard_web.py --hours 1` (only the demo-time throws) → second screen.
+Judging: functionality 40% · ambition 20% · creativity 20% · modularity 15% · Halloween 5%.
 
-**Setup before going on:** ball near the robot, cup upright 70–95 cm out, Atlas dashboard on a
-second screen, `python main.py --go --autotune` ready, someone on the E-stop. Backup: the video.
+## Before going on (10 min before)
+- **Robot (SSH window):** `cd ~/Ball-Toss-In-Cup && . .venv/bin/activate && git pull`
+- **Laptop (Command Prompt, NOT SSH):** `python dashboard_web.py --hours 1` → second screen.
+  (`--hours 1` = the board starts clean-ish; it fills live during the demo.)
+- 6 red cups on the taped ARC (~92 cm from the base), ~3 cm water, **dry** orange balls 30-55 cm
+  in front of the base, ~8 cm apart, nowhere near the cups.
+- Someone on the E-stop. Backup: the 6-for-8 video.
+- Known-good code: branch `six-cups-oct30` (`git checkout six-cups-oct30` if anything breaks).
 
-## 0:00 – Problem (15 s)
-"Beer pong is easy for people and hard for robots: find a small ball, grab it without crushing it,
-find a cup somewhere on a messy table, and land the ball in a 9 cm opening. We built that
-end to end on a UFactory 850 with Viam, in one afternoon."
+## 0:00 – The problem (30 s)
+"Beer pong is easy for people and hard for robots. Find a 4 cm ball on a table, pick it up, find six
+cups, and throw it into a 9 cm opening a metre away. Everything's a separate hard problem: vision,
+grasping, aiming, and throwing with an arm that was built to move slowly and precisely."
 
-## 0:15 – Live run (45 s) — press enter, narrate as it moves
-1. **Home → find the ball.** "The wrist camera spots the orange ball, then moves directly over it to
-   measure it precisely. We calibrated the camera-to-gripper error on the real arm."
-2. **Pick.** "It grabs at the ball's equator — the fingers swing down as they close, so it grabs
-   high and lets them come down onto the ball."
-3. **Zoom out, look across the table.** "Now it tilts back and scans for the cup at 30° and 45°."
-4. **Find the cup.** "The ball in the gripper hides the cup's red side, so a red-color detector fails.
-   Ours finds the cup from its opening — the inside of a red cup has a pink tint nothing else has."
-5. **Drop.** "The cup is beyond straight-down reach, so it tilts the gripper forward to reach over it."
-6. **Home.** Type `y`.
+## 0:30 – Live: fill the cups (2 min) — start it, then narrate
+```bash
+python pick_and_throw.py --fill-cups --go --i-checked-with-staff
+```
+1. **Survey.** "It looks at the table from six angles and merges what it sees into six cups — numbered
+   right to left — and remembers them. It never re-targets a filled cup."
+2. **Find + pick.** "Wrist camera finds the orange balls, moves over one and takes three close-up
+   readings — they agree to a tenth of a millimetre — then picks it."
+3. **Throw.** "The base turns to aim, the arm whips up and the fingers open mid-swing."
+4. Answer honestly (`in`, `rim front`, `short 3`…). Point at the dashboard: the cup turns green.
+Let 3-4 balls go live, then move on while it keeps going.
 
-## 1:00 – The data (30 s) — switch to the Atlas dashboard
-"Every attempt goes to MongoDB Atlas: ball and cup positions, release pose, hit or miss, and which
-way it missed." Point at: **hit rate**, **miss scatter**, **failures by type**.
-"And it closes the loop: with `--autotune`, the robot reads its recent misses back from Atlas and
-shifts its aim to correct them."
+## 2:30 – How it throws (ambition + creativity, 1 min)
+- "The swing was designed on the arm's kinematic model and is checked against the table and ceiling
+  before every throw — fast throws skip Viam's planner, so we do the safety check ourselves."
+- "Timing is everything: the fingers take ~0.15 s to react, the swing lasts 0.7 s. From the laptop,
+  Wi-Fi added up to 400 ms of random delay — 0 for 73 on Thursday. We moved the code onto the robot's
+  own computer: 3 ms. Same code, from zero hits to filling all six cups."
+- "We tried four throw styles. Open-hand throws physically can't work on this arm — it can't brake
+  hard enough to fling a loose ball. We proved that on the model, so we stopped trying them."
 
-## 1:30 – How we built it (20 s)
-"Viam made the hardware software: arm, gripper, camera and motion planning behind one API, with
-obstacles so it can't hit the table. Detectors and 3D vision are config blocks; our logic is ~500
-lines of Python. We drove it with an AI agent through Viam's MCP server while we calibrated."
+## 3:30 – MongoDB: the robot learns (1 min) — dashboard, right chart
+"Every attempt goes into Atlas: where it aimed, how fast it swung, where the ball landed. The right
+chart is the arm's physics model (dashed) against reality. Balls fly ~12% shorter than the model —
+air drag on a 2.7 g ball. Before every throw the robot reads its last 8 throws from Atlas and picks
+its speed from the learned line. This morning it was missing 4-5 cm short; two runs later it was
+throwing 6 for 8."
+Point at: **Throws in the cup**, **cups filled**, **×0.87 learned**, the feed.
 
-## 1:50 – The throw (live if it's landing, else video) (40 s)
-`python pick_and_throw.py --aim-cup --cradle --go --i-checked-with-staff` (cup ~95 cm) or `--far`
-default (80-100 cm). Pick whichever landed more consistently in the morning.
-"Past ~95 cm it can't reach, so it throws. The swing was designed on the arm's kinematic model,
-checked against the table and ceiling before every throw, and the speed is picked from its own
-past throws in Atlas: `python throw_fit.py` shows model vs real landing per throw style."
-Cups: an ARC of 4-6 cups, all ~97 cm from the arm base, 2-3 cm gaps, ~2 cm of water each.
-"Distance is the hard part of a throw, so every cup is at the robot's best distance; it turns to aim."
-`--fill-cups` fills them one by one and never re-targets a filled cup.
+## 4:30 – Modularity + Viam (30 s)
+"Viam turned the hardware into software: arm, gripper, camera and motion planning behind one API.
+Cup detection also runs as a Viam vision service. The throw is a preset table + a learned
+correction — any xArm team can give it a cup distance."
 
-## 2:30 – What's next (10 s)
-"Run the throw as a Viam module on the robot computer, so any xArm team can call `throw` with a
-distance."
+## Numbers (fill in right before)
+- Throws: **6 cups filled in 8 throws (75%)** on the last full run, every throw at the target cup.
+- Drop (pick → carry → drop): 11/11 when the cup is in reach.
+- Learned correction: ×____ (dashboard).  Today's throws in: ____ / ____ (dashboard).
+- Command latency: laptop 15-400 ms → robot computer 2.6 ms (jitter 0.7 ms).
 
-## Numbers to fill in before the demo
-- Drop hit rate: __ / __ (from `python stats.py`; 11/11 on Oct 29)
-- Throw: __ / __ ; FAR model vs real: x__ (`python throw_fit.py`)
-- Furthest cup hit: __ cm
-- Time per attempt: __ s (logged as `duration_s`)
+## If something goes wrong live
+- Ball not picked → it retries, then moves on. Keep talking; it's the honest demo.
+- E-stop / "Emergency Stop Button Pushed In" → see WORKING.md (clear_error), restart the command.
+- Robot dead → play the video, walk through the dashboard.

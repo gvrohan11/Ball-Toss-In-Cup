@@ -1,8 +1,10 @@
-# What works (Oct 30, 10:10) — don't lose this
+# What works — don't lose this
 
-**Result:** `--fill-cups` from the robot computer threw 2 balls into cups 1 and 2 of a 6-cup arc
-(2 for 2), fully automatic: survey → find ball → pick → aim → throw → next cup.
-Exact code: branch **`throw-works-oct30`** (`git checkout throw-works-oct30` to get it back; it never changes).
+**Best result (Oct 30, 10:55): all 6 cups filled in 8 throws (75%)**, fully automatic, every throw
+at its target cup: survey → find ball → pick → aim → throw → next cup.
+Exact code: branch **`six-cups-oct30`** (`git checkout six-cups-oct30`; it never changes).
+It adds, on top of the 10:10 version (branch `throw-works-oct30`, 2 for 2): re-learning the speed
+before every throw (#58), the robust ball detector (#57), rim front/back answers (#56).
 
 ## The command
 ```bash
@@ -28,8 +30,9 @@ POWER and the partial open are the defaults. Answer every throw in plain words:
 - POWER throw (`throw.POWER`): direct mode, fingers back/down, slow swing ~78-85 deg/s for 92-95 cm.
 - Release: partial open (+150 units at gripper speed 5000) sent ~0.27 s into the swing.
   Finger reaction on the robot: 0.10-0.18 s after the command (`scripts/gripper_timing_test.py --partial`).
-- Distance: `throw_fit` learned from Atlas that balls fly **x0.915** of the URDF model (air drag),
-  from 6 measured throws at 68-85 deg/s (-10, -5, -3, -1 cm, rim, in). It picks the speed itself.
+- Distance: `throw_fit` learns from the newest 8 measured throws in Atlas how far balls really fly
+  vs the URDF model (air drag): x0.915 in the morning, **x0.875** in the 6-cup run (dry balls,
+  cups at ~91 cm -> ~82 deg/s). It re-learns before every throw. Wet balls fly shorter: dry them.
 - Aim: base yaw = atan2(y, x) of the cup. Correct direction, checked on cups 23° and 15° right.
 
 ## What did NOT work (don't retry blindly)
