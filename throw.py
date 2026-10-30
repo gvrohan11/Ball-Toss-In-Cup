@@ -95,7 +95,7 @@ async def _go_home(motion, tries=3):
 
 
 async def throw(robot, distance_mm, go, scale=1.0, release=True, release_delay_s=None,
-                swing_deg=None, speed_dps=None, accel_dps2=None, wind_z=None):
+                swing_deg=None, speed_dps=None, accel_dps2=None, wind_z=None, start_j=None):
     """scale (0.1..1) shrinks the swing angles AND the speed: use 0.2-0.3 first, empty gripper,
     release=False, to watch the motion before any real throw."""
     if not 0.1 <= scale <= 1.0:
@@ -110,12 +110,28 @@ async def throw(robot, distance_mm, go, scale=1.0, release=True, release_delay_s
         if not 300 <= wind_z <= 800:
             raise ValueError("--wind-z must be between 300 and 800 mm")
         wind["z"] = wind_z
-    print(f"1) wind up (planned move) to {wind}")
-    if go:
-        ok = await motion.move(GRIPPER, PoseInFrame(reference_frame="world", pose=Pose(**wind)))
-        if ok is False:
-            raise RuntimeError("wind-up move failed")
-    start = list((await arm.get_joint_positions()).values) if go else [0.0] * 6
+    if start_j is not None:
+        # Direct joint move to a known start configuration (J2, J3, J5; the other joints stay as
+        # they are). Used by the lob, whose swing is designed around exact joint angles.
+        print(f"1) wind up (joint move): J2={start_j[0]} J3={start_j[1]} J5={start_j[2]}")
+        if go:
+            pose = await arm.get_end_position()
+            if abs(pose.x - HOME["x"]) > 90 or abs(pose.y - HOME["y"]) > 90 or pose.z < 350:
+                raise RuntimeError(f"Start from home first (arm at {pose.x:.0f}, {pose.y:.0f}, {pose.z:.0f}): "
+                                   "this wind-up is a direct joint move. Run `python home.py`.")
+            cur = list((await arm.get_joint_positions()).values)
+            target = [cur[0], start_j[0], start_j[1], cur[3], start_j[2], cur[5]]
+            check_limits(cur, target)
+            await arm.do_command({"set_speed": NORMAL_SPEED})
+            await arm.move_to_joint_positions(JointPositions(values=target))
+    else:
+        print(f"1) wind up (planned move) to {wind}")
+        if go:
+            ok = await motion.move(GRIPPER, PoseInFrame(reference_frame="world", pose=Pose(**wind)))
+            if ok is False:
+                raise RuntimeError("wind-up move failed")
+    start = list((await arm.get_joint_positions()).values) if go else (
+        [0.0, start_j[0], start_j[1], 0.0, start_j[2], 0.0] if start_j else [0.0] * 6)
     end = list(start)
     swing_deg = dict(SWING_DEG if swing_deg is None else swing_deg)
     for j, d in swing_deg.items():
@@ -177,11 +193,19 @@ async def throw(robot, distance_mm, go, scale=1.0, release=True, release_delay_s
 
 def swing_from_args(a):
     """SWING_DEG with any --j2/--j3/--j5 overrides (joint index = J number - 1)."""
-    sw = dict(SWING_DEG)
+    sw = dict(LOB_SWING if getattr(a, "lob", False) else SWING_DEG)
     for j, v in ((1, a.j2), (2, a.j3), (4, a.j5)):
         if v is not None:
             sw[j] = v
     return sw
+
+
+# LOB: ball leaves almost straight UP at full speed. Measured Oct 29 at the middle of the swing
+# (gripper mm per degree, forward/up): J2+ (-2.2, +8.2), J3+ (-4.8, -7.3), J5+ (+3.4, 0).
+# J2 +180, J3 -180, J5 -111 deg/s -> ~2.8 m/s up, ~0.1 m/s forward. The path is a vertical lift
+# (gripper 20 -> 80 cm above the table at x~370-480), released mid-swing; lands ~0.5 m from the base.
+LOB_START_J = (-25.0, -45.9, -48.3)            # J2, J3, J5 at the start of the swing
+LOB_SWING = {1: +40.0, 2: -40.0, 4: -25.0}      # end: J2 +15, J3 -85.9, J5 -73.3 (all within limits)
 
 
 async def _main():
@@ -201,6 +225,8 @@ async def _main():
     ap.add_argument("--j5", type=float, default=None, help="wrist swing deg (default +45: tips forward)")
     ap.add_argument("--wind-z", type=float, default=None,
                     help="wind-up height mm (default 450). Higher start = longer swing path = a higher lob (try 650)")
+    ap.add_argument("--lob", action="store_true",
+                    help="near-vertical full-speed toss (cup ~50 cm from the base); see LOB_* in this file")
     ap.add_argument("--go", action="store_true")
     ap.add_argument("--i-checked-with-staff", action="store_true")
     a = ap.parse_args()
@@ -210,7 +236,8 @@ async def _main():
     robot = await connect()
     try:
         print(await throw(robot, a.distance, go, a.scale, not a.no_release, a.release_delay,
-                          swing_from_args(a), a.speed, a.accel, a.wind_z))
+                          swing_from_args(a), a.speed, a.accel, a.wind_z,
+                          LOB_START_J if a.lob else None))
     finally:
         await robot.close()
 
