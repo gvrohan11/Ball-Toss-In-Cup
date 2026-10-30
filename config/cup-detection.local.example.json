@@ -3,7 +3,7 @@
     {
       "name": "red-solo-cup-local",
       "type": "local",
-      "executable_path": "/ABSOLUTE/PATH/ON/ROBOT/Ball-Toss-In-Cup/cup_detection/run.sh",
+      "executable_path": "/ABSOLUTE/PATH/ON/ROBOT/Ball-Toss-In-Cup/cup_vision/run.sh",
       "environment": {
         "CUP_PYTHON": "/ABSOLUTE/PATH/ON/ROBOT/Ball-Toss-In-Cup/.conda/bin/python"
       }

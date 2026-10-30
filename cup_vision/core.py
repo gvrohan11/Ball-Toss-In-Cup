@@ -197,7 +197,7 @@ class CupDetector:
             try:
                 from ultralytics import YOLO
             except ImportError as exc:
-                raise RuntimeError("Install cup_detection/requirements.txt before semantic cup detection") from exc
+                raise RuntimeError("Install cup_vision/requirements.txt before semantic cup detection") from exc
             LOGGER.info("Loading semantic cup detector %s", self.config.model_path)
             self._model = YOLO(self.config.model_path)
         names = self._model.names

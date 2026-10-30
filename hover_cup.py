@@ -22,8 +22,8 @@ from viam.robot.client import RobotClient
 from viam.services.motion import MotionClient
 
 from connection import connect
-from cup_detection.client import CupLocator, LocatedCup
-from cup_detection.core import CupDetector, DetectorConfig
+from cup_vision.client import CupLocator, LocatedCup
+from cup_vision.core import CupDetector, DetectorConfig
 
 LOGGER = logging.getLogger(__name__)
 

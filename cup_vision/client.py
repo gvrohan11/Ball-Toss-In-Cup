@@ -16,7 +16,7 @@ from viam.media.video import CameraMimeType
 from viam.proto.common import Pose, PoseInFrame
 from viam.robot.client import RobotClient
 
-from cup_detection.core import CupDetector, CupDetection, RimEstimate
+from cup_vision.core import CupDetector, CupDetection, RimEstimate
 
 LOGGER = logging.getLogger(__name__)
 

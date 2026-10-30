@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 from viam.proto.common import Pose, PoseInFrame
 
-from cup_detection.client import LocatedCup
+from cup_vision.client import LocatedCup
 from hover_cup import CupHoverController, HoverSettings, HoverPlan
 
 

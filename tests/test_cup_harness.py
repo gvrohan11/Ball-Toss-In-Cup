@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 from viam.media.video import CameraMimeType, NamedImage
 
-from scripts.cup_test import annotate, decode_pair, offline_sources
+from cup_detection import annotate, decode_pair, offline_sources
 
 
 def pair() -> tuple[list[NamedImage], np.ndarray]:
@@ -57,7 +57,7 @@ class CaptureTests(unittest.TestCase):
         detection = types.SimpleNamespace(bbox=(10, 10, 40, 50), confidence=0.9,
                                           label="red_solo_cup", rim_ellipse=None)
         fake_core = types.SimpleNamespace(localize_rim=lambda *args, **kwargs: None)
-        with patch.dict("sys.modules", {"cup_detection.core": fake_core}):
+        with patch.dict("sys.modules", {"cup_vision.core": fake_core}):
             image, records = annotate(original, [detection], np.ones((80, 100)),
                                       {"fx": 100, "fy": 100, "cx": 50, "cy": 40},
                                       types.SimpleNamespace(config=None))

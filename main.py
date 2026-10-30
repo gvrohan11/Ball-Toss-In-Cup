@@ -16,7 +16,8 @@ from viam.proto.common import Pose, PoseInFrame
 from viam.services.motion import MotionClient
 
 from connection import connect
-from cup_aim import CUP_SCAN, find_cup
+from cup_aim import CUP_SCAN
+from cup_detection import find_cup  # YOLO11m-seg + depth rim fit (not the red color detector)
 from drop import drop_in_cup
 from logger import log_attempt, suggest_offset
 from pick_ball import GRIPPER, LOOK, THETA, find_ball, pick
@@ -189,6 +190,7 @@ async def run_once(robot, motion, go, home, t0):
 
 def _run_config():
     import cup_aim
+    import cup_detection
     import drop
     import pick_ball
     return {"theta": THETA, "home": list(LOOK),
@@ -196,6 +198,7 @@ def _run_config():
             "grab_z": pick_ball.GRAB_Z, "hover_z": pick_ball.HOVER_Z,
             "rim_correction_mm": list(cup_aim.RIM_CORRECTION_MM),
             "topdown_correction_mm": list(cup_aim.TOPDOWN_CORRECTION_MM),
+            "cup_detection": "yolo", "cup_correction_mm": list(cup_detection.CUP_CORRECTION_MM),
             "release_above_rim_mm": drop.RELEASE_ABOVE_RIM_MM,
             "autotune": "--autotune" in sys.argv}
 
