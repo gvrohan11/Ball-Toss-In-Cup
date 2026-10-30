@@ -74,11 +74,12 @@ def doc(preset, speed, cup, **result):
 
 def test_landing_rules():
     assert throw_fit.landing_mm(doc("far", 180, 786, long_cm=20)) == 986
-    assert throw_fit.landing_mm(doc("far", 165, 955, long_cm=0)) == 955          # legacy 0 = right distance
+    assert throw_fit.landing_mm(doc("far", 165, 955, long_cm=0)) is None         # legacy 0 = not measured
+    assert throw_fit.landing_mm(doc("far", 165, 955, long_cm=0, outcome="rim_out")) == 955
     assert throw_fit.landing_mm(doc("far", 165, 955, hit=True)) == 955
     assert throw_fit.landing_mm(doc("far", 165, 955, outcome="dropped")) is None
     assert throw_fit.landing_mm(doc("power", 180, 10, long_cm=50)) is None       # hand-typed bogus distance
-    d = doc("far", 165, 955, long_cm=0)
+    d = doc("far", 165, 955, long_cm=12)
     d["exclude_from_fit"] = True
     assert throw_fit.landing_mm(d) is None
 

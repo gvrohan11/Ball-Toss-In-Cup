@@ -3,8 +3,7 @@ xArm850 URDF and checked live on sfhack11 (Oct 29):
 
   far    open-hand forward toss, cups ~80-100 cm. THE DEFAULT. The ball rides in the palm with the
          fingers pointing forward, and it flies off when the arm brakes, so finger timing matters little.
-         Live: the landing matched the model within ~8 cm (19:33-19:37) and hit the right distance at
-         955 mm / 165 deg/s six times in a row (20:10-20:16; missed by bouncing out, not distance).
+         Live: the 3 measured landings (19:33-19:37) were within ~8 cm of the model.
   power  full-force throw for distance (direct mode only), cups 1-2 m. Timed release: it scatters more.
 
     python throw.py --distance 900                                 # dry run: prints the plan

@@ -11,8 +11,7 @@ throw's speed comes from the robot's own history.
 Landing rules (per document):
   result.hit True, or outcome "in" / "rim_out"  -> landed at the cup distance
   result.long_cm != 0                           -> cup distance + long_cm
-  legacy docs (no outcome) with long_cm 0       -> landed at the cup distance (that is how the
-                                                   Oct 29 runs were typed: right distance, bounced out)
+  legacy docs (no outcome) with long_cm 0       -> skipped (Oct 29: 0 was typed as "no measurement")
   outcome "dropped" / "wide_unknown", exclude_from_fit, distance outside 300-2500 mm -> skipped
 """
 import statistics
@@ -40,8 +39,8 @@ def landing_mm(doc):
     long_cm = r.get("long_cm")
     if long_cm is None:
         return None
-    if long_cm == 0 and outcome is None and r.get("hit") is False:
-        return float(d)          # legacy: right distance, missed by bouncing out
+    if long_cm == 0 and outcome is None:
+        return None              # legacy: 0 meant "not measured", not "right distance"
     return d + 10.0 * long_cm
 
 

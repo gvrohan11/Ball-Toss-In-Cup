@@ -73,7 +73,7 @@ goal is Phase 2: **throw** the ball into a cup out of drop reach.
   (scatters more). `plan()` = speed from the preset table x the Atlas correction, release time,
   joint limits + swept-path check, no robot. `throw()` runs a plan from home. Requires
   `--i-checked-with-staff`. Whip / pitch / lob / the first draft swing were cut Oct 29
-  (0 hits, scattered; still in git history).
+  (0 hits; still in git history).
 - `throw_safety.py`: URDF forward kinematics + `path_problems` (from Rohan's toss_ball.py).
 - `throw_fit.py`: `correction(preset)` = median(observed / model landing) over recent Atlas
   throws (≥3, clamped 0.8-1.25). Docs with `exclude_from_fit` or bogus distances are skipped.
@@ -94,9 +94,9 @@ goal is Phase 2: **throw** the ball into a cup out of drop reach.
   field), `DEMO.md`, `DASHBOARD.md`, `docs/cup-detection.md`.
 
 ## Throw: what we learned on Oct 29 (73 logged throws, 0 hits)
-- FAR range looks solved: the model was right within ~8 cm when long/short was measured, and
-  6 throws at 955 mm / 165 deg/s were logged as 0 cm long (read as "right distance, didn't go
-  in" - throw_fit assumes that for legacy 0s; new runs log an explicit outcome).
+- FAR: the 3 throws with a real long/short measurement landed within ~8 cm of the model.
+  Every Oct 29 `long_cm: 0` means "not measured" (they're flagged `exclude_from_fit`); new runs
+  log an explicit outcome.
 - `gripper.open()` takes ~0.85-1.15 s to return; the swing is 0.36-0.8 s. Timed releases
   (whip/power/pitch) land at a random point in the swing → big scatter. FAR works because the
   ball sits in the palm and leaves when the arm brakes.
