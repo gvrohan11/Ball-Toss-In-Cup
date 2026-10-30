@@ -49,7 +49,7 @@ def rig(monkeypatch):
 
 
 def args(**kw):
-    d = dict(distance=1100.0, scale=1.0, no_release=False, release_delay=None, speed=None, accel=None, j2=None, j3=None, j5=None, wind_z=None, go=True, i_checked_with_staff=True)
+    d = dict(distance=1100.0, scale=1.0, no_release=False, release_delay=None, speed=None, accel=None, j2=None, j3=None, j5=None, wind_z=None, lob=False, yaw=0.0, aim_cup=False, go=True, i_checked_with_staff=True)
     d.update(kw)
     return SimpleNamespace(**d)
 
@@ -61,7 +61,7 @@ def test_throws_only_after_a_good_pick(rig, monkeypatch):
     async def pick(robot, ball, go):
         return True
 
-    async def throw(robot, d, go, scale, release, delay=None, swing=None, speed=None, accel=None, wind_z=None):
+    async def throw(robot, d, go, scale, release, delay=None, swing=None, speed=None, accel=None, wind_z=None, start_j=None, yaw=0.0, gripper_speed=None):
         thrown.append((d, go))
         return {"distance_mm": d}
 
@@ -113,7 +113,7 @@ def test_refuses_live_without_staff_flag(rig, monkeypatch):
         seen.append(go)
         return None
 
-    async def throw(robot, d, go, scale, release, delay=None, swing=None, speed=None, accel=None, wind_z=None):
+    async def throw(robot, d, go, scale, release, delay=None, swing=None, speed=None, accel=None, wind_z=None, start_j=None, yaw=0.0, gripper_speed=None):
         seen.append(("throw", go))
         return {}
 
@@ -140,3 +140,18 @@ def test_landing_answer_accepts_units(monkeypatch):
         assert pt.ask_landing()["long_cm"] == want
     monkeypatch.setattr("builtins.input", lambda prompt="": "in")
     assert pt.ask_landing() == {"hit": True}
+
+
+def test_aim_cup_refuses_when_cup_is_out_of_range(rig, monkeypatch):
+    m, events = rig
+    import main as main_mod
+    async def scan(motion, robot, go):
+        return (836.0, -135.0, 100.0)
+    monkeypatch.setattr(main_mod, "scan_for_cup", scan)
+    thrown = []
+    async def throw(*a, **k):
+        thrown.append(1)
+        return {}
+    monkeypatch.setattr(pt.throw, "throw", throw)
+    asyncio.run(pt.run(args(lob=True, aim_cup=True)))
+    assert thrown == []

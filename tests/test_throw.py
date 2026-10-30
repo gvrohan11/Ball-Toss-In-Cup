@@ -107,3 +107,92 @@ def test_wind_z_validated(monkeypatch):
     with pytest.raises(ValueError):
         asyncio.run(throw.throw(object(), 1100, False, wind_z=1500))
     assert asyncio.run(throw.throw(object(), 1100, False, wind_z=650))["dry_run"] is True
+
+
+def test_lob_swing_is_inside_limits_and_goes_up():
+    start = [0.0, throw.LOB_START_J[0], throw.LOB_START_J[1], 0.0, throw.LOB_START_J[2], 0.0]
+    end = list(start)
+    for j, d in throw.LOB_SWING.items():
+        end[j] += d
+    throw.check_limits(start, end)
+    assert end[1] > start[1] and end[2] < start[2]      # shoulder back/up, elbow up
+
+
+def test_lob_dry_run(monkeypatch):
+    for cls in (throw.MotionClient, throw.Arm, throw.Gripper):
+        monkeypatch.setattr(cls, "from_robot", staticmethod(lambda r, n: object()))
+    out = asyncio.run(throw.throw(object(), 500, False, swing_deg=throw.LOB_SWING, start_j=throw.LOB_START_J))
+    assert out["dry_run"] is True
+    a = SimpleNamespace(j2=None, j3=None, j5=None, lob=True)
+    assert throw.swing_from_args(a) == throw.LOB_SWING
+
+
+def test_lob_default_speed_is_below_the_controller_limit(monkeypatch):
+    for cls in (throw.MotionClient, throw.Arm, throw.Gripper):
+        monkeypatch.setattr(cls, "from_robot", staticmethod(lambda r, n: object()))
+    # peak gripper speed ~ 2.79 m/s * speed/180; 180 deg/s tripped the xArm limit, so stay well under it
+    assert throw.LOB_SPEED_DPS <= 130
+    out = asyncio.run(throw.throw(object(), 500, False, swing_deg=throw.LOB_SWING, start_j=throw.LOB_START_J))
+    assert out["dry_run"] is True
+
+
+def test_yaw_for_cup_points_at_cup(capsys):
+    assert abs(throw.yaw_for_cup(480, 0)) < 1e-9
+    assert abs(throw.yaw_for_cup(480, 480) - 45) < 1e-6
+    assert throw.yaw_for_cup(480, -85) < 0
+
+
+def test_yaw_needs_lob_and_is_limited(monkeypatch):
+    for cls in (throw.MotionClient, throw.Arm, throw.Gripper):
+        monkeypatch.setattr(cls, "from_robot", staticmethod(lambda r, n: object()))
+    with pytest.raises(ValueError):
+        asyncio.run(throw.throw(object(), 500, False, yaw_deg=10))
+    with pytest.raises(ValueError):
+        asyncio.run(throw.throw(object(), 500, False, swing_deg=throw.LOB_SWING, start_j=throw.LOB_START_J, yaw_deg=60))
+    out = asyncio.run(throw.throw(object(), 500, False, swing_deg=throw.LOB_SWING, start_j=throw.LOB_START_J, yaw_deg=12))
+    assert out["dry_run"] is True
+
+
+def test_far_swing_inside_limits_and_speed_table():
+    start = [0.0, throw.FAR_START_J[0], throw.FAR_START_J[1], 0.0, throw.FAR_START_J[2], 0.0]
+    end = list(start)
+    for j, d in throw.FAR_SWING.items():
+        end[j] += d
+    throw.check_limits(start, end)
+    assert abs(throw.far_speed_for(983) - 180) < 1e-6
+    assert 105 < throw.far_speed_for(850) < 120
+    assert throw.far_speed_for(5000) == 180.0
+    assert throw.far_speed_for(100) >= 100.0
+    # open command goes out before the arm starts braking (fingers lag ~0.3 s)
+    assert -0.3 < throw.far_release_delay(180) < 0.0
+
+
+def test_far_dry_run(monkeypatch):
+    for cls in (throw.MotionClient, throw.Arm, throw.Gripper):
+        monkeypatch.setattr(cls, "from_robot", staticmethod(lambda r, n: object()))
+    fp = throw.far_params(850)
+    out = asyncio.run(throw.throw(object(), 850, False, 1.0, True, fp["release_delay_s"], fp["swing_deg"],
+                                  fp["speed_dps"], fp["accel_dps2"], None, fp["start_j"], -9.1, fp["gripper_speed"]))
+    assert out["dry_run"] is True
+
+
+def test_whip_inside_limits_and_faster_table():
+    start = [0.0, throw.WHIP_START_J[0], throw.WHIP_START_J[1], 0.0, throw.WHIP_START_J[2], 0.0]
+    end = list(start)
+    for j, d in throw.WHIP_SWING.items():
+        end[j] += d
+    throw.check_limits(start, end)
+    assert 90 <= throw.far_speed_for(850, "whip") < 110
+    assert throw.far_speed_for(5000, "whip") == 180.0
+    fp = throw.far_params(850, preset="whip")
+    assert fp["start_j"] == throw.WHIP_START_J and fp["gripper_speed"] == 5000
+
+
+def test_pitch_inside_limits():
+    start = [0.0, throw.PITCH_START_J[0], throw.PITCH_START_J[1], 0.0, throw.PITCH_START_J[2], 0.0]
+    end = list(start)
+    for j, d in throw.PITCH_SWING.items():
+        end[j] += d
+    throw.check_limits(start, end)
+    assert 160 < throw.far_speed_for(892, "pitch") <= 180
+    assert throw.far_release_delay(170, preset="pitch") > 0.1
