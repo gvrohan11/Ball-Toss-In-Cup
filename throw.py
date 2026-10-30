@@ -95,7 +95,7 @@ async def _go_home(motion, tries=3):
 
 
 async def throw(robot, distance_mm, go, scale=1.0, release=True, release_delay_s=None,
-                swing_deg=None, speed_dps=None, accel_dps2=None, wind_z=None, start_j=None):
+                swing_deg=None, speed_dps=None, accel_dps2=None, wind_z=None, start_j=None, yaw_deg=0.0):
     """scale (0.1..1) shrinks the swing angles AND the speed: use 0.2-0.3 first, empty gripper,
     release=False, to watch the motion before any real throw."""
     if not 0.1 <= scale <= 1.0:
@@ -105,6 +105,10 @@ async def throw(robot, distance_mm, go, scale=1.0, release=True, release_delay_s
     delay = release_delay(distance_mm) if release_delay_s is None else float(release_delay_s)
     if not -0.6 <= delay <= 0.6:
         raise ValueError("--release-delay must be between -0.6 and 0.6 s")
+    if yaw_deg and start_j is None:
+        raise ValueError("--yaw / --cup only work with --lob (direct joint swing)")
+    if abs(yaw_deg) > 45:
+        raise ValueError("yaw must be within +-45 deg (cup at the side: move the cup nearer the middle)")
     wind = dict(WIND_UP)
     if wind_z is not None:
         if not 300 <= wind_z <= 800:
@@ -113,14 +117,15 @@ async def throw(robot, distance_mm, go, scale=1.0, release=True, release_delay_s
     if start_j is not None:
         # Direct joint move to a known start configuration (J2, J3, J5; the other joints stay as
         # they are). Used by the lob, whose swing is designed around exact joint angles.
-        print(f"1) wind up (joint move): J2={start_j[0]} J3={start_j[1]} J5={start_j[2]}")
+        print(f"1) wind up (joint move): J2={start_j[0]} J3={start_j[1]} J5={start_j[2]}, yaw {yaw_deg:+.1f} deg")
         if go:
             pose = await arm.get_end_position()
             if abs(pose.x - HOME["x"]) > 90 or abs(pose.y - HOME["y"]) > 90 or pose.z < 350:
                 raise RuntimeError(f"Start from home first (arm at {pose.x:.0f}, {pose.y:.0f}, {pose.z:.0f}): "
                                    "this wind-up is a direct joint move. Run `python home.py`.")
             cur = list((await arm.get_joint_positions()).values)
-            target = [cur[0], start_j[0], start_j[1], cur[3], start_j[2], cur[5]]
+            # J1 turns the whole swing plane about the base: +yaw = toward +y (checked live: J1 +4.3 deg -> y +25 at x 339)
+            target = [cur[0] + yaw_deg, start_j[0], start_j[1], cur[3], start_j[2], cur[5]]
             check_limits(cur, target)
             await arm.do_command({"set_speed": NORMAL_SPEED})
             await arm.move_to_joint_positions(JointPositions(values=target))
@@ -131,7 +136,7 @@ async def throw(robot, distance_mm, go, scale=1.0, release=True, release_delay_s
             if ok is False:
                 raise RuntimeError("wind-up move failed")
     start = list((await arm.get_joint_positions()).values) if go else (
-        [0.0, start_j[0], start_j[1], 0.0, start_j[2], 0.0] if start_j else [0.0] * 6)
+        [yaw_deg, start_j[0], start_j[1], 0.0, start_j[2], 0.0] if start_j else [0.0] * 6)
     end = list(start)
     swing_deg = dict(SWING_DEG if swing_deg is None else swing_deg)
     for j, d in swing_deg.items():
@@ -196,6 +201,21 @@ async def throw(robot, distance_mm, go, scale=1.0, release=True, release_delay_s
             "timing": timing}
 
 
+LOB_RELEASE_RADIUS_MM = 480   # about where the lob lets go, measured from the base (landed on the cup's distance)
+
+
+def yaw_for_cup(x, y):
+    """Base rotation (deg) that points the lob plane at a cup at world (x, y) mm; also warns on distance."""
+    import math
+    yaw = math.degrees(math.atan2(y, x))
+    r = math.hypot(x, y)
+    print(f"   aim: cup at ({x:.0f}, {y:.0f}) -> yaw {yaw:+.1f} deg, {r:.0f} mm from the base "
+          f"(lob lands ~{LOB_RELEASE_RADIUS_MM} mm out)")
+    if abs(r - LOB_RELEASE_RADIUS_MM) > 80:
+        print("!! cup is more than 8 cm from where the lob lands: move the cup to ~48 cm from the base")
+    return yaw
+
+
 def swing_from_args(a):
     """SWING_DEG with any --j2/--j3/--j5 overrides (joint index = J number - 1)."""
     sw = dict(LOB_SWING if getattr(a, "lob", False) else SWING_DEG)
@@ -237,6 +257,7 @@ async def _main():
     ap.add_argument("--j5", type=float, default=None, help="wrist swing deg (default +45: tips forward)")
     ap.add_argument("--wind-z", type=float, default=None,
                     help="wind-up height mm (default 450). Higher start = longer swing path = a higher lob (try 650)")
+    ap.add_argument("--yaw", type=float, default=0.0, help="turn the lob toward +y by this many deg (--lob only)")
     ap.add_argument("--lob", action="store_true",
                     help="near-vertical full-speed toss (cup ~50 cm from the base); see LOB_* in this file")
     ap.add_argument("--go", action="store_true")
@@ -249,7 +270,7 @@ async def _main():
     try:
         print(await throw(robot, a.distance, go, a.scale, not a.no_release, a.release_delay,
                           swing_from_args(a), a.speed, a.accel, a.wind_z,
-                          LOB_START_J if a.lob else None))
+                          LOB_START_J if a.lob else None, a.yaw))
     finally:
         await robot.close()
 
