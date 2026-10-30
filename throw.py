@@ -106,9 +106,15 @@ async def _go_home(motion, tries=3):
 
 async def throw(robot, distance_mm, go, scale=1.0, release=True, release_delay_s=None,
                 swing_deg=None, speed_dps=None, accel_dps2=None, wind_z=None, start_j=None, yaw_deg=0.0,
-                gripper_speed=None, direct=False):
+                gripper_speed=None, direct=False, aligned_base_deg=None):
     """scale (0.1..1) shrinks the swing angles AND the speed: use 0.2-0.3 first, empty gripper,
     release=False, to watch the motion before any real throw."""
+    if aligned_base_deg is not None:
+        import math
+        if not math.isfinite(aligned_base_deg):
+            raise ValueError("aligned_base_deg must be a finite joint-0 angle")
+        if 0 in (swing_deg or {}):
+            raise ValueError("a pre-aligned throw must not swing joint 0")
     if not 0.1 <= scale <= 1.0:
         raise ValueError("--scale must be between 0.1 and 1")
     motion = MotionClient.from_robot(robot, "builtin")
@@ -116,7 +122,7 @@ async def throw(robot, distance_mm, go, scale=1.0, release=True, release_delay_s
     delay = release_delay(distance_mm) if release_delay_s is None else float(release_delay_s)
     if not -0.6 <= delay <= 0.6:
         raise ValueError("--release-delay must be between -0.6 and 0.6 s")
-    if yaw_deg and start_j is None:
+    if yaw_deg and start_j is None and aligned_base_deg is None:
         raise ValueError("--yaw / --cup only work with --lob (direct joint swing)")
     if abs(yaw_deg) > 45:
         raise ValueError("yaw must be within +-45 deg (cup at the side: move the cup nearer the middle)")
@@ -131,25 +137,48 @@ async def throw(robot, distance_mm, go, scale=1.0, release=True, release_delay_s
         print(f"1) wind up (joint move): J2={start_j[0]} J3={start_j[1]} J5={start_j[2]}, yaw {yaw_deg:+.1f} deg")
         if go:
             pose = await arm.get_end_position()
-            if abs(pose.x - HOME["x"]) > 90 or abs(pose.y - HOME["y"]) > 90 or pose.z < 350:
+            import math
+            at_home = (abs(pose.x - HOME["x"]) <= 90 and abs(pose.y - HOME["y"]) <= 90)
+            if aligned_base_deg is not None:
+                at_home = abs(math.hypot(pose.x, pose.y) - math.hypot(HOME["x"], HOME["y"])) <= 90
+            if not at_home or pose.z < 350:
                 raise RuntimeError(f"Start from home first (arm at {pose.x:.0f}, {pose.y:.0f}, {pose.z:.0f}): "
                                    "this wind-up is a direct joint move. Run `python home.py`.")
             cur = list((await arm.get_joint_positions()).values)
             # J1 turns the whole swing plane about the base: +yaw = toward +y (checked live: J1 +4.3 deg -> y +25 at x 339)
-            target = [cur[0] + yaw_deg, start_j[0], start_j[1], cur[3], start_j[2], cur[5]]
+            target = [cur[0] + yaw_deg if aligned_base_deg is None else aligned_base_deg, start_j[0], start_j[1], cur[3], start_j[2], cur[5]]
             check_limits(cur, target)
             await arm.do_command({"set_speed": NORMAL_SPEED})
             await arm.move_to_joint_positions(
                 JointPositions(values=target),
                 extra={"direct": True, "speed_d": NORMAL_SPEED, "acceleration_d": 300.0} if direct else None)
     else:
+        if aligned_base_deg is not None:
+            # Keep the joint-0 heading set by pick_and_throw.align_with_cup: rotate the wind-up
+            # pose about the base (world z) by that heading, so the planned move stays facing
+            # the cup instead of swinging back to +X.
+            wind = rotate_about_base(wind, yaw_deg)
         print(f"1) wind up (planned move) to {wind}")
         if go:
             ok = await motion.move(GRIPPER, PoseInFrame(reference_frame="world", pose=Pose(**wind)))
             if ok is False:
                 raise RuntimeError("wind-up move failed")
+            if aligned_base_deg is not None:
+                cur = list((await arm.get_joint_positions()).values)
+                off = cur[0] - aligned_base_deg
+                if abs(off) > 10:
+                    raise RuntimeError(f"wind-up left joint 0 at {cur[0]:.1f}, {off:+.1f} deg from the cup heading; "
+                                       "refusing to throw")
+                if abs(off) > 0.5:   # planner settled slightly off: put joint 0 back on the cup heading
+                    target = list(cur)
+                    target[0] = aligned_base_deg
+                    check_limits(cur, target)
+                    await arm.do_command({"set_speed": NORMAL_SPEED})
+                    await arm.move_to_joint_positions(JointPositions(values=target))
     start = list((await arm.get_joint_positions()).values) if go else (
-        [yaw_deg, start_j[0], start_j[1], 0.0, start_j[2], 0.0] if start_j else [0.0] * 6)
+        [yaw_deg, start_j[0], start_j[1], 0.0, start_j[2], 0.0] if start_j else [yaw_deg, 0.0, 0.0, 0.0, 0.0, 0.0])
+    if go and aligned_base_deg is not None and abs(start[0] - aligned_base_deg) > 0.5:
+        raise RuntimeError(f"joint 0 is at {start[0]:.1f}, not the cup heading {aligned_base_deg:.1f}; refusing to throw")
     end = list(start)
     swing_deg = dict(SWING_DEG if swing_deg is None else swing_deg)
     for j, d in swing_deg.items():
@@ -231,6 +260,17 @@ async def throw(robot, distance_mm, go, scale=1.0, release=True, release_delay_s
 
 
 LOB_RELEASE_RADIUS_MM = 480   # about where the lob lets go, measured from the base (landed on the cup's distance)
+
+
+def rotate_about_base(pose, deg):
+    """The same pose turned about the world z axis (the arm base axis) by deg (+ = toward +y).
+    Position and orientation vector rotate; theta stays (it is measured about the vector)."""
+    import math
+    c, s = math.cos(math.radians(deg)), math.sin(math.radians(deg))
+    p = dict(pose)
+    p["x"], p["y"] = c * pose["x"] - s * pose["y"], s * pose["x"] + c * pose["y"]
+    p["o_x"], p["o_y"] = c * pose["o_x"] - s * pose["o_y"], s * pose["o_x"] + c * pose["o_y"]
+    return p
 
 
 def yaw_for_cup(x, y, warn=True):
