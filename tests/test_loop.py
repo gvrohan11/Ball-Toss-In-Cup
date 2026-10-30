@@ -3,6 +3,7 @@
     python -m pytest -q tests
 """
 import asyncio
+import math
 import json
 import os
 import sys
@@ -677,3 +678,111 @@ def test_normal_run_discards_out_of_reach_cups(rig, monkeypatch, capsys, det_log
     assert state == "dropped" and doc["cup"]["pos_mm"] == (700.0, 0.0, 110.0)
     events = [json.loads(s) for s in (log.dir / "log.jsonl").read_text().splitlines() if '"event"' in s]
     assert [e["event"] for e in events][:3] == ["survey", "discarded", "target"]
+
+
+
+# ---------- ball search before giving up: the table between the robot and the cups ----------
+@pytest.fixture
+def search_rig(monkeypatch):
+    """find_ball with fake moves; locate_ball answers per gripper position from `balls_at`."""
+    moves, balls_at = [], {}
+
+    async def move(motion, x, y, z, go):
+        moves.append((x, y, z))
+
+    found = []
+
+    async def locate(robot, prefer_center=False):
+        b = balls_at.get(moves[-1][:2]) if moves[-1][2] != pick_ball.TOP_VIEW[2] else balls_at.get("top")
+        if b:
+            found.append(b)
+        return b
+
+    async def closeup(robot, go):              # camera now over the ball: it is where it was seen
+        return found[-1] if found else None
+
+    monkeypatch.setattr(pick_ball, "move", move)
+    monkeypatch.setattr(pick_ball, "locate_ball", locate)
+    monkeypatch.setattr(pick_ball, "closeup", closeup)
+    monkeypatch.setattr(pick_ball, "LOOK_SETTLE_S", 0)
+    return moves, balls_at
+
+
+def test_no_ball_at_look_pose_searches_the_rest_of_the_table(search_rig, monkeypatch):
+    moves, balls_at = search_rig
+    monkeypatch.setattr(pick_ball, "AVOID_XY", [(915.0, 70.0)])           # cups ~92 cm out
+    balls_at[(520, -300)] = (600.0, -330.0, 10.0)                          # only in a side view
+    ball = asyncio.run(pick_ball.find_ball(object(), object(), True))
+    assert ball is not None
+    looked = [m[:2] for m in moves if m[2] == pick_ball.LOOK[2]]
+    assert looked[0] == pick_ball.LOOK[:2] and (520, -300) in looked
+    assert looked.index((520, -300)) == len(looked) - 1                   # stopped at the first ball
+
+
+def test_search_stops_short_of_the_cups_and_then_says_no_ball(search_rig, monkeypatch, capsys):
+    moves, balls_at = search_rig
+    monkeypatch.setattr(pick_ball, "AVOID_XY", [(700.0, 0.0)])            # cups close: line at 55 cm
+    assert asyncio.run(pick_ball.find_ball(object(), object(), True)) is None
+    looked = [m[:2] for m in moves if m[2] == pick_ball.LOOK[2]][1:]
+    cam = lambda g: math.hypot(g[0] - pick_ball.CAM_OFFSET_XY[0], g[1] - pick_ball.CAM_OFFSET_XY[1])
+    assert looked and all(cam(g) <= 550 for g in looked)                   # no view past the line
+    assert (520, 0) not in looked                                          # far views skipped
+    out = capsys.readouterr().out
+    assert "searching the table up to 55 cm" in out and "no ball left before the cups" in out
+
+
+def test_ball_at_look_pose_needs_no_search(search_rig, monkeypatch):
+    moves, balls_at = search_rig
+    balls_at[pick_ball.LOOK[:2]] = (420.0, 10.0, 10.0)
+    asyncio.run(pick_ball.find_ball(object(), object(), True))
+    assert [m for m in moves if m[2] == pick_ball.LOOK[2]] == [pick_ball.LOOK]
+
+
+
+def test_search_looks_from_the_top_first(search_rig, monkeypatch):
+    moves, balls_at = search_rig
+    monkeypatch.setattr(pick_ball, "AVOID_XY", [(915.0, 70.0)])
+    balls_at["top"] = (420.0, 330.0, 10.0)                                  # seen from above
+    cx, cy = pick_ball.CAM_CORRECTION_MM                                    # grab point = seen + correction
+    assert asyncio.run(pick_ball.find_ball(object(), object(), True))[:2] == (420.0 + cx, 330.0 + cy)
+    looks = [m for m in moves if m[2] in (pick_ball.LOOK[2], pick_ball.TOP_VIEW[2])]
+    assert looks == [pick_ball.LOOK, pick_ball.TOP_VIEW]                     # look pose, then the top
+
+
+
+def test_ball_lost_in_closeup_looks_again_instead_of_no_ball(search_rig, monkeypatch, capsys):
+    """A ball seen at the look pose but lost in the close-up used to end with "no ball found"."""
+    moves, balls_at = search_rig
+    balls_at[pick_ball.LOOK[:2]] = (420.0, 10.0, 10.0)
+    answers = iter([None, (421.0, 11.0, 10.0)])            # 1st close-up loses it, 2nd sees it
+
+    async def closeup(robot, go):
+        return next(answers)
+
+    monkeypatch.setattr(pick_ball, "closeup", closeup)
+    ball = asyncio.run(pick_ball.find_ball(object(), object(), True))
+    assert ball is not None
+    assert [m for m in moves if m[2] == pick_ball.LOOK[2]].count(pick_ball.LOOK) == 2
+    assert "looking again (1/3)" in capsys.readouterr().out
+
+
+def test_ball_never_measurable_gives_up_after_three_looks(search_rig, monkeypatch, capsys):
+    moves, balls_at = search_rig
+    balls_at[pick_ball.LOOK[:2]] = (420.0, 10.0, 10.0)
+
+    async def far_closeup(robot, go):
+        return (520.0, 10.0, 10.0)                         # always 100 mm off: "moved"
+
+    monkeypatch.setattr(pick_ball, "closeup", far_closeup)
+    assert asyncio.run(pick_ball.find_ball(object(), object(), True)) is None
+    assert [m for m in moves if m[2] == pick_ball.LOOK[2]].count(pick_ball.LOOK) == pick_ball.FIND_TRIES
+    assert "couldn't be measured in 3 close-ups" in capsys.readouterr().out
+
+
+def test_no_ball_found_only_after_the_whole_search(search_rig, monkeypatch, capsys):
+    moves, balls_at = search_rig
+    monkeypatch.setattr(pick_ball, "AVOID_XY", [(915.0, 70.0)])
+    assert asyncio.run(pick_ball.find_ball(object(), object(), True)) is None
+    looks = [m for m in moves if m[2] in (pick_ball.LOOK[2], pick_ball.TOP_VIEW[2])]
+    assert looks == [pick_ball.LOOK] + pick_ball.search_views()            # every view, once
+    assert "table searched: no ball left before the cups" in capsys.readouterr().out

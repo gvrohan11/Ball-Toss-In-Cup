@@ -107,8 +107,38 @@ def near_cup(xy):
     return any(math.hypot(xy[0] - cx, xy[1] - cy) < AVOID_RADIUS_MM for cx, cy in AVOID_XY)
 
 
-def _skip_near_cup(items, i):
-    items[i].update(kept=False, why="in or next to a cup")
+# Ball search: when the look pose shows no ball, more of the table is searched, but only the
+# part between the robot and the cups: up to CUP_MARGIN_MM short of the nearest cup.
+CUP_MARGIN_MM = 150
+DEFAULT_SEARCH_MAX_R = 700      # no cups surveyed yet: search out to 70 cm from the base
+# Extra look poses (gripper x, y at the look height, camera straight down). The camera sits
+# (83, 14) mm ahead of the gripper and sees ~41 cm (x) by ~73 cm (y) from there, so these
+# cover the sides, the far strip and the strip near the base around the normal LOOK view.
+# First the TOP view: gripper at z 800 straight down (the cup survey's view 7) sees ~1.2 x 0.7 m
+# of table in one frame (a ball is ~21 px across there). Then the closer side views.
+TOP_VIEW = (480, 0, 800)
+SEARCH_VIEWS = [TOP_VIEW] + [(x, y, LOOK[2]) for x, y in
+                             [(350, 300), (350, -300), (520, 0), (520, 300), (520, -300), (250, 0)]]
+
+
+def search_max_r():
+    """Farthest a ball may be from the base (mm): CUP_MARGIN_MM short of the nearest cup."""
+    if AVOID_XY:
+        return min(math.hypot(x, y) for x, y in AVOID_XY) - CUP_MARGIN_MM
+    return DEFAULT_SEARCH_MAX_R
+
+
+def skip_reason(xy):
+    """Why a ball at world xy must not be picked, or None."""
+    if near_cup(xy):
+        return "in or next to a cup"
+    if math.hypot(xy[0], xy[1]) > search_max_r():
+        return "past the search line (too near the cups)"
+    return None
+
+
+def _skip(items, i, why):
+    items[i].update(kept=False, why=why)
 
 
 async def _frame(cam):
@@ -192,13 +222,14 @@ async def locate_ball_shape(robot, prefer_center=False):
             cx, cy, cz = cand["center_camera_mm"]
             w = (await robot.transform_pose(PoseInFrame(reference_frame=CAMERA,
                                                         pose=Pose(x=cx, y=cy, z=cz)), "world")).pose
-            if near_cup((w.x, w.y)):
-                _skip_near_cup(items, balls.index(cand))
+            why = skip_reason((w.x, w.y))
+            if why:
+                _skip(items, balls.index(cand), why)
                 continue
             b, pos = cand, (w.x, w.y, BALL_CENTER_Z)
             break
         if b is None:
-            print("  the only balls in view are in or next to cups")
+            print("  the only balls in view are in/next to cups or past the search line")
             detection_log.record("ball_depth", bgr, items, **meta)
             return None
         _chose(items, balls.index(b), ((pos, None)))
@@ -226,8 +257,8 @@ async def locate_ball_shape(robot, prefer_center=False):
     b = hit = None
     for i, cand in enumerate(found):
         h = await _pixel_to_table(robot, k, cand["u"], cand["v"], BALL_CENTER_Z)
-        if h is not None and near_cup(h[0]):
-            _skip_near_cup(items, i)
+        if h is not None and skip_reason(h[0]):
+            _skip(items, i, skip_reason(h[0]))
             continue
         b, hit = cand, h
         break
@@ -288,13 +319,13 @@ async def locate_ball(robot, prefer_center=False):
     b = hit = None
     for cand in alone:
         h = await _pixel_to_table(robot, k, cand["u"], cand["v"], BALL_CENTER_Z)
-        if h is not None and near_cup(h[0]):
-            _skip_near_cup(items, balls.index(cand))
+        if h is not None and skip_reason(h[0]):
+            _skip(items, balls.index(cand), skip_reason(h[0]))
             continue
         b, hit = cand, h
         break
     if b is None:
-        print("  the only balls in view are in or next to cups")
+        print("  the only balls in view are in/next to cups or past the search line")
         detection_log.record("ball_orange", frame, items, **meta)
         return None
     _chose(items, balls.index(b), hit)
@@ -331,26 +362,113 @@ async def closeup(robot, go):
     return med
 
 
+def search_views():
+    """SEARCH_VIEWS whose camera is not past the search line (the top view always: it sees
+    the whole table; balls past the line are filtered out anyway)."""
+    limit = search_max_r()
+    return [v for v in SEARCH_VIEWS if v == TOP_VIEW or
+            math.hypot(v[0] - CAM_OFFSET_XY[0], v[1] - CAM_OFFSET_XY[1]) <= limit]
+
+
+def cut_off(b, w, h, margin=0.9):
+    """The ball's circle runs past the frame edge (its fitted center is unreliable)."""
+    r = margin * b["r"]
+    return b["u"] - r < 0 or b["v"] - r < 0 or b["u"] + r > w or b["v"] + r > h
+
+
+async def balls_in_view(robot):
+    """EVERY orange ball in the current view (not just the one the picker would take):
+    [{"xy": (x, y) world mm, "why": reason it would not be picked or None, "touching": bool}].
+    Balls cut off at the frame edge are left out (logged as rejected). Read-only."""
+    from ball_finder import find_balls
+    from cup_aim import _pixel_to_table
+
+    cam = Camera.from_robot(robot, CAMERA)
+    k = (await cam.get_properties()).intrinsic_parameters
+    frame = await _frame(cam)
+    if frame is None:
+        return []
+    cam_pos = (await robot.transform_pose(
+        PoseInFrame(reference_frame=CAMERA, pose=Pose(x=0, y=0, z=0)), "world")).pose
+    expected_r = k.focal_x_px * (BALL_DIAMETER_MM / 2) / (cam_pos.z - BALL_CENTER_Z)
+    balls = find_balls(frame, expected_r)
+    items = _ball_items(balls, frame)
+    out = []
+    h, w = frame.shape[:2]
+    for i, b in enumerate(balls):
+        hit = await _pixel_to_table(robot, k, b["u"], b["v"], BALL_CENTER_Z)
+        if hit is None:
+            continue
+        xy = hit[0][:2]
+        if cut_off(b, w, h):          # its center is a guess; another view (the top) sees it whole
+            items[i].update(world_mm=hit[0], kept=False, why="cut off at the frame edge")
+            continue
+        why = "touching another ball" if b["touching"] else skip_reason(xy)
+        items[i].update(world_mm=hit[0], kept=why is None, **({"why": why} if why else {}))
+        out.append({"xy": xy, "why": why, "touching": bool(b["touching"])})
+    detection_log.record("ball_scan", frame, items, expected_r_px=round(expected_r, 1), closeup=False)
+    return out
+
+
+async def search_table(robot, motion, go):
+    """No ball at the look pose: look from SEARCH_VIEWS over the table between the robot and
+    the cups (views whose camera is past the search line are skipped, unreachable ones too).
+    Returns the first ball's coarse position, or None when that whole area is empty."""
+    limit = search_max_r()
+    views = search_views()
+    print(f"  no ball at the look pose: searching the table up to {limit / 10:.0f} cm from the base "
+          f"(before the cups), {len(views)} more view(s), from the top first")
+    for i, (gx, gy, gz) in enumerate(views, 1):
+        detection_log.context(f"ball_search_{i}")
+        try:
+            await move(motion, gx, gy, gz, go)
+        except Exception as e:
+            print(f"    view {i}/{len(views)} ({gx}, {gy}, z {gz}): can't reach, skipped ({str(e)[:50]})")
+            continue
+        if go:
+            await asyncio.sleep(LOOK_SETTLE_S)
+        ball = await locate_ball(robot)
+        print(f"    view {i}/{len(views)} ({gx}, {gy}, z {gz}): "
+              + (f"ball at ({ball[0]:.0f}, {ball[1]:.0f})" if ball else "no ball"))
+        if ball is not None:
+            return ball
+    print("  table searched: no ball left before the cups")
+    return None
+
+
+FIND_TRIES = 3              # a ball seen but lost in the close-up: look again this many times
+
+
 async def find_ball(robot, motion, go):
-    """Coarse look, then center the camera over the ball for an accurate fix."""
-    await move(motion, *LOOK, go)
-    if go:
-        await asyncio.sleep(LOOK_SETTLE_S)
-    coarse = await locate_ball(robot)
-    if coarse is None:
-        return None
-    print(f"  coarse ball: {coarse[0]:.0f}, {coarse[1]:.0f}, {coarse[2]:.0f}")
-    await move(motion, coarse[0] + CAM_OFFSET_XY[0], coarse[1] + CAM_OFFSET_XY[1], MEASURE_HEIGHT_Z, go)
-    fine = await closeup(robot, go) if go else coarse
-    if fine is None:
-        return None
-    jump = math.hypot(fine[0] - coarse[0], fine[1] - coarse[1])
-    if jump > 40:  # coarse/fine normally agree within ~15 mm
-        print(f"  ball moved {jump:.0f} mm between views (bumped or wrong object); not descending")
-        return None
-    x, y, z = fine[0] + CAM_CORRECTION_MM[0], fine[1] + CAM_CORRECTION_MM[1], fine[2]
-    print(f"  fine ball (corrected): {x:.0f}, {y:.0f}, {z:.0f}")
-    return (x, y, z)
+    """Coarse look, then center the camera over the ball for an accurate fix. If the look
+    pose shows no ball, the rest of the table before the cups is searched (search_table).
+    Returns None ("no ball found") only when the look pose AND the search find nothing, or
+    when a ball that was seen can't be measured in FIND_TRIES close-ups."""
+    for attempt in range(1, FIND_TRIES + 1):
+        await move(motion, *LOOK, go)
+        if go:
+            await asyncio.sleep(LOOK_SETTLE_S)
+        coarse = await locate_ball(robot)
+        if coarse is None:
+            coarse = await search_table(robot, motion, go)
+        if coarse is None:
+            return None                               # look pose + whole search: no ball
+        print(f"  coarse ball: {coarse[0]:.0f}, {coarse[1]:.0f}, {coarse[2]:.0f}")
+        await move(motion, coarse[0] + CAM_OFFSET_XY[0], coarse[1] + CAM_OFFSET_XY[1], MEASURE_HEIGHT_Z, go)
+        fine = await closeup(robot, go) if go else coarse
+        if fine is None:
+            print(f"  lost the ball in the close-up; looking again ({attempt}/{FIND_TRIES})")
+            continue
+        jump = math.hypot(fine[0] - coarse[0], fine[1] - coarse[1])
+        if jump > 40:  # coarse/fine normally agree within ~15 mm
+            print(f"  ball moved {jump:.0f} mm between views (bumped or wrong object); "
+                  f"looking again ({attempt}/{FIND_TRIES})")
+            continue
+        x, y, z = fine[0] + CAM_CORRECTION_MM[0], fine[1] + CAM_CORRECTION_MM[1], fine[2]
+        print(f"  fine ball (corrected): {x:.0f}, {y:.0f}, {z:.0f}")
+        return (x, y, z)
+    print(f"  a ball was seen but couldn't be measured in {FIND_TRIES} close-ups; giving up on it")
+    return None
 
 
 async def wait_gripper(gripper, timeout_s=3.0):
