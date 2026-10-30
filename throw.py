@@ -64,7 +64,9 @@ FAR = dict(start_j=(55.9, -19.6, 11.1),            # J2, J3, J5
 POWER = dict(start_j=(-57.4, -65.5, -79.5),
              swing={1: +33.1, 2: -34.7, 4: +34.3},
              table=[(60, 900), (80, 1017), (100, 1187), (120, 1412), (140, 1679), (160, 1955), (180, 2179)],
-             lead=0.40, min_speed=50.0, direct=True,
+             lead=0.17,        # ON THE ROBOT COMPUTER (Oct 30): partial open starts 0.10-0.18 s after the
+                               # command; the laptop-era 0.40 s included 15-400 ms of network delay
+             min_speed=50.0, direct=True,
              min_delay=0.0)    # fingers point back/down at the start: never open before the swing
 # CRADLE (spoon): FAR's swing with the wrist rolled 90 deg so the fingers sit ABOVE and BELOW the ball
 # (the lower finger is a spoon), and a PARTIAL open sent the moment the swing starts. If the fingers
@@ -171,10 +173,10 @@ def plan(distance_mm, preset="far", speed=None, release_delay_s=None, ratio=1.0,
     cradle = p.get("release") == "cradle"
     if release_delay_s is not None:
         delay = float(release_delay_s)
-    else:
-        delay = 0.0 if cradle else release_delay(spd, preset)
-    if not -0.6 <= delay <= 0.6:
-        raise ValueError("--release-delay must be between -0.6 and 0.6 s")
+        if not -0.6 <= delay <= 0.8:
+            raise ValueError("--release-delay must be between -0.6 and 0.8 s")
+    else:   # computed: slow / scaled swings can brake late; never refuse a plan over the default
+        delay = min(0.8, 0.0 if cradle else release_delay(spd, preset))
     swing = {j: d * scale for j, d in p["swing"].items()}
     if p["start_j"] is None:
         raise ValueError(f"preset {preset!r} has no design yet")
