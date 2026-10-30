@@ -14,7 +14,9 @@ python pick_and_throw.py --aim-cup            # Phase 2 dry run: find cup, plan 
 python pick_and_throw.py --aim-cup --go --i-checked-with-staff          # FAR throw at the cup (80-100 cm)
 python pick_and_throw.py --aim-cup --power --go --i-checked-with-staff  # POWER throw for 1-2 m (direct mode)
 python pick_and_throw.py --aim-cup --cradle-check --go --i-checked-with-staff  # spoon pose, NO swing: does the ball stay?
-python pick_and_throw.py --aim-cup --cradle --go --i-checked-with-staff        # spoon throw, cups ~0.9-1.0 m
+python pick_and_throw.py --survey-only --cradle --go --i-checked-with-staff    # find + list the cups only
+python pick_and_throw.py --aim-cup --cradle --go --i-checked-with-staff        # spoon throw, nearest cup in ~93-102 cm
+python pick_and_throw.py --fill-cups --cradle --go --i-checked-with-staff      # one ball per cup; filled cups skipped
 python throw_fit.py              # how far each throw preset really goes vs its model (from Atlas)
 python scripts/latency_check.py  # command round-trip; run on laptop AND robot (docs/RUN_ON_ROBOT.md)
 python throw_safety.py           # swept-path check of every throw preset, no robot

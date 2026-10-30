@@ -343,12 +343,17 @@ def preset_from_args(a):
     return "power" if a.power else "far"
 
 
-def plan_from_args(a, distance_mm, yaw_deg=None):
+def learned_ratio(a):
+    """Atlas correction for the chosen preset (1.0 with --no-learn or a fixed --speed)."""
+    if a.no_learn or a.speed is not None:
+        return 1.0
+    import throw_fit
+    return throw_fit.correction(preset_from_args(a))
+
+
+def plan_from_args(a, distance_mm, yaw_deg=None, ratio=None):
     preset = preset_from_args(a)
-    ratio = 1.0
-    if not a.no_learn and a.speed is None:
-        import throw_fit
-        ratio = throw_fit.correction(preset)
+    ratio = learned_ratio(a) if ratio is None else ratio
     return plan(distance_mm, preset, a.speed, a.release_delay, ratio,
                 a.yaw if yaw_deg is None else yaw_deg, a.scale)
 

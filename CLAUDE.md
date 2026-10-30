@@ -84,9 +84,15 @@ goal is Phase 2: **throw** the ball into a cup out of drop reach.
   robot computer to remove laptop Wi-Fi jitter.
 - `throw_fit.py`: `correction(preset)` = median(observed / model landing) over recent Atlas
   throws (≥3, clamped 0.8-1.25). Docs with `exclude_from_fit` or bogus distances are skipped.
-- `pick_and_throw.py`: home → (`--aim-cup`) scan + aim → plan + check BEFORE picking → pick →
-  throw → ask outcome (`in` / `rim` / ±cm long[,±cm left] / `drop`) → log `phase: throw`
-  with `throw.preset`, `cup`, `result.outcome`.
+- `pick_and_throw.py`: `--aim-cup` / `--fill-cups` / `--survey-only` survey ONCE with
+  `main.survey_cups(in_range=<preset band>)` (gripper empty, every view, merged, numbered nearest
+  first, AVOID_XY set). Targets = cups inside the preset's distance band (`throw.reach_mm`);
+  `--cup N` picks one. Per ball: plan + check BEFORE picking → pick → throw → ask outcome
+  (`in` / `in 3` / `rim` / ±cm long[,±cm left] / `drop`) → log `phase: throw` with `throw.preset`,
+  `cup {number, pos_mm, dist_mm, of}`, `result.outcome`. `--fill-cups`: filled cups (incl. "in 3"
+  lucky ones) are never targeted again; MAX_TRIES_PER_CUP misses → next cup.
+- Cup layout for throws: an ARC at one distance (cradle band ~93-102 cm), not a triangle: the
+  band is narrow, aiming left/right is just base yaw.
 - `logger.py`: MongoDB Atlas `balltoss.attempts` (no `MONGODB_URI` → readable
   `attempt.json` in the detection-log folder, never dumped to the terminal); `suggest_offset()` = autotune from
   recent `miss_mm`. `telemetry.py`: per-move timings + snapshots in the attempt doc.

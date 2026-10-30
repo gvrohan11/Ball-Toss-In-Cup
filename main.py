@@ -151,9 +151,11 @@ async def scan_for_cup(motion, robot, go):
     return None
 
 
-async def survey_cups(motion, robot, go):
+async def survey_cups(motion, robot, go, in_range=None, range_label=None):
     """Look at the table from EVERY view in CUP_SCAN (skipping views the planner can't
-    reach) and return all cups found, in the world frame, nearest first."""
+    reach) and return all cups found, in the world frame, nearest first.
+    in_range(pos_mm) -> bool replaces the drop's reach test (pick_and_throw passes the throw's
+    distance band); range_label says what the range is in the printout."""
     import cup_aim
     cup_aim.USE_YOLO = "--no-yolo" not in sys.argv
     cup_aim.YOLO_OFFSETS.clear()
@@ -179,6 +181,10 @@ async def survey_cups(motion, robot, go):
                 await TEL.thumbnail("cup_view")
         sightings += seen
     cups = merge_sightings(sightings)
+    if in_range is not None:
+        for c in cups:
+            c["reachable"] = bool(in_range(c["pos_mm"]))
+    label = range_label or f"drop reach {REACH_MAX_MM / 10:.0f} cm"
     import pick_ball
     pick_ball.AVOID_XY = [c["pos_mm"][:2] for c in cups]   # never pick a ball out of a cup
     detection_log.context("survey")
@@ -188,11 +194,13 @@ async def survey_cups(motion, robot, go):
     for n, c in enumerate(cups, 1):
         x, y, z = c["pos_mm"]
         print(f"    cup {n}: x={x:.0f} y={y:+.0f}  {math.hypot(x, y) / 10:.0f} cm out, "
-              f"seen {c['sightings']}x" + ("" if c["reachable"] else "  <- out of reach"))
+              f"seen {c['sightings']}x" + ("" if c["reachable"] else
+                                           f"  <- outside {label}" if range_label else "  <- out of reach"))
     for n, c in enumerate(cups, 1):              # out-of-reach cups are discarded right away
         if not c["reachable"]:
             x, y, z = c["pos_mm"]
-            why = f"out of reach: {math.hypot(x, y) / 10:.0f} cm > {REACH_MAX_MM / 10:.0f} cm"
+            why = (f"{math.hypot(x, y) / 10:.0f} cm is outside {label}" if range_label else
+                   f"out of reach: {math.hypot(x, y) / 10:.0f} cm > {REACH_MAX_MM / 10:.0f} cm")
             print(f"  DISCARDED cup {n} at x={x:.0f} y={y:+.0f} z={z:.0f} ({why})")
             detection_log.event("discarded", number=n, cup_mm=c["pos_mm"], why=why,
                                 left=sum(1 for k in cups if k["reachable"]))
