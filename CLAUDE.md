@@ -11,7 +11,7 @@ goal is Phase 2: **throw** the ball into a cup out of drop reach.
 - Normal moves go through Viam motion planning (`motion.move` on `"gripper"`, world frame)
   so the table, wall and ceiling obstacles are checked. **Direct joint moves
   (`arm.move_to_joint_positions`) skip obstacle checks.** Throws need them for speed, so
-  a throw script must check its own swept path (see `toss_ball.path_problems`).
+  a throw script must check its own swept path (`throw_safety.path_problems`, used by `throw.plan`/`throw.throw`).
 - Any speed or acceleration raised with `arm.do_command({"set_speed": ...})` must be
   restored in a `finally`.
 - If something fails while holding the ball: put it back, open, go home
@@ -29,9 +29,9 @@ goal is Phase 2: **throw** the ball into a cup out of drop reach.
   angle. Changing theta flips the offsets.
 - `"gripper"` frame = flange + 105 mm. Ball center ≈ flange + 175 mm when held.
 - Home: `x=350 y=0 z=445`, pointing down (`o_z=-1`), theta 180.
-- Obstacles: table, wall-back (x ≈ -525), wall-left (y ≈ 625), ceiling. The ceiling's
-  bottom is z=1000 in `config/sfhack11.standalone.json`. TASKS.md says it was raised to
-  1250 on the live machine. Check the live config before relying on either.
+- Obstacles (LIVE config, read Oct 29 21:50): table top -23, wall-back face x=-525, wall-left
+  face y=625, ceiling bottom z=1200 (box center 1250). `config/sfhack11.standalone.json` still
+  says 1000; the live machine wins. `throw_safety.py` uses the live values.
 - Constants are module-level CAPS with a comment saying how they were measured
   ("worked on sfhack11 Oct 29 ..."). Keep that habit when tuning.
 - Code style: small async functions, `go` flag passed down, `print` narration of each
@@ -66,11 +66,27 @@ goal is Phase 2: **throw** the ball into a cup out of drop reach.
   drops cut-off openings and boxes inside stronger ones. 3D: rim ellipse fit, else a circle
   fit to the top 15 mm of depth points. `rotation_search` is off (only added duplicates).
   `cup_vision/`: the same detector as a Viam vision service (Rohan).
-  `cups.py` / `balls.py`: thin original teammate interfaces.
 - `drop.py`: release pose over the rim. Straight down to x≈650. Beyond that, tilt
   forward `o=(0.7,0,-0.7)`. Reach limit ≈ 95 cm.
-- `throw.py`: **untested draft** throw (planned wind-up, then a direct J2+J4 swing with a
-  timed gripper open from a placeholder `RELEASE_TABLE`). Requires `--i-checked-with-staff`.
+- `throw.py`: three presets. `far` (default): open-hand toss, cups ~80-100 cm, model matched
+  the 3 measured landings within ~8 cm. `cradle` (`--cradle`): FAR's swing with the wrist rolled
+  90 deg (fingers above/below the ball = spoon) and a PARTIAL open at swing start, 165-180 deg/s
+  only (cups ~0.9-1.0 m); `--cradle-check` holds the pose with no swing. `power`: full-force,
+  direct mode, 1-2 m, timed release (scatters more). `--partial`: timed release opens partway. `plan()` = speed from the preset table x the Atlas correction, release time,
+  joint limits + swept-path check, no robot. `throw()` runs a plan from home. Requires
+  `--i-checked-with-staff`. Whip / pitch / lob / the first draft swing were cut Oct 29
+  (0 hits; still in git history).
+- `throw_safety.py`: URDF forward kinematics + `path_problems` (from Rohan's toss_ball.py). FK
+  checked against the live arm (flange 350.55, 0, 550.76 at home joints: exact).
+- `scripts/design_cradle.py`: ball-exit simulation. Found a fingers-UP cradle is infeasible (max
+  accel brakes the ball at ~1.2-1.8 g); FAR's motion clears the fingertips at 165-180 deg/s.
+- `scripts/latency_check.py` + `docs/RUN_ON_ROBOT.md` + `requirements-robot.txt`: run on the
+  robot computer to remove laptop Wi-Fi jitter.
+- `throw_fit.py`: `correction(preset)` = median(observed / model landing) over recent Atlas
+  throws (≥3, clamped 0.8-1.25). Docs with `exclude_from_fit` or bogus distances are skipped.
+- `pick_and_throw.py`: home → (`--aim-cup`) scan + aim → plan + check BEFORE picking → pick →
+  throw → ask outcome (`in` / `rim` / ±cm long[,±cm left] / `drop`) → log `phase: throw`
+  with `throw.preset`, `cup`, `result.outcome`.
 - `logger.py`: MongoDB Atlas `balltoss.attempts` (no `MONGODB_URI` → readable
   `attempt.json` in the detection-log folder, never dumped to the terminal); `suggest_offset()` = autotune from
   recent `miss_mm`. `telemetry.py`: per-move timings + snapshots in the attempt doc.
@@ -80,22 +96,20 @@ goal is Phase 2: **throw** the ball into a cup out of drop reach.
   view pose, every candidate kept/rejected with reason and world mm, survey/target/result
   events). Detectors call `detection_log.record(...)`; no-op unless `main.attempt` started a
   log. `python detection_log.py` summarizes the newest folder.
-- `scripts/`, `hover_cup.py`, `scene_detection.py`: read-only/diagnostic tools.
+- `scripts/gripper_timing_test.py`, `scene_detection.py`: diagnostic / white-ball helpers.
 - Docs: `TASKS.md` (owners, calibration history, log schema incl. the Phase 2 `throw`
   field), `DEMO.md`, `DASHBOARD.md`, `docs/cup-detection.md`.
 
-## Throw work: what already exists (check before writing new code)
-- `throw.py` on `main`: simple timed-release draft, not physics-based.
-- `origin/rohan/tossball` → `toss_ball.py` (+ `tests/test_toss.py`): physics-based toss.
-  URDF forward kinematics, ballistic release speed for a target distance, elbow+wrist
-  split by ratio `K`, a runway so the joints reach full speed at the release pose, gripper
-  latency compensation, and swept-path checks against table, ceiling and walls. It throws
-  along +x only (no cup aiming yet).
-- `sk/throw` branch (worktree at `~/.codex/worktrees/eaaf/...`): cup tracking
-  (`cup_tracking.py`: remember the cup before picking) and `motion_control.py`.
-- Open problems: base yaw (J0) to aim at a cup off-axis; measuring gripper open latency;
-  release timing jitter over the network (15–400 ms seen); closing the loop with Atlas
-  (log `throw: {...}` per TASKS.md, fit release parameters from logged misses).
+## Throw: what we learned on Oct 29 (73 logged throws, 0 hits)
+- FAR: the 3 throws with a real long/short measurement landed within ~8 cm of the model.
+  Every Oct 29 `long_cm: 0` means "not measured" (they're flagged `exclude_from_fit`); new runs
+  log an explicit outcome.
+- `gripper.open()` takes ~0.85-1.15 s to return; the swing is 0.36-0.8 s. Timed releases
+  (whip/power/pitch) land at a random point in the swing → big scatter. FAR works because the
+  ball sits in the palm and leaves when the arm brakes.
+- Not in code: water in the cups (bounce-outs), a cup triangle (bigger target). Running on the
+  robot computer is documented (docs/RUN_ON_ROBOT.md), not a module yet.
+- Arm config has `collision_sensitivity: 0` (xArm collision detection off). Ask staff.
 
 ## Running
 ```bash

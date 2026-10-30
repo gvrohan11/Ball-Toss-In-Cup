@@ -10,7 +10,14 @@ python check_connection.py  # read-only check
 python home.py              # send the arm to the saved safe home pose
 python main.py              # dry run: prints the plan, moves nothing, logs nothing
 python main.py --go         # live: home -> survey + remember all cups -> find + pick ball (slowly) -> drop -> home
-python pick_and_throw.py --distance 1100 --scale 0.3 --go --i-checked-with-staff  # Phase 2: PICK then THROW (staff OK first!)
+python pick_and_throw.py --aim-cup            # Phase 2 dry run: find cup, plan + safety-check the throw
+python pick_and_throw.py --aim-cup --go --i-checked-with-staff          # FAR throw at the cup (80-100 cm)
+python pick_and_throw.py --aim-cup --power --go --i-checked-with-staff  # POWER throw for 1-2 m (direct mode)
+python pick_and_throw.py --aim-cup --cradle-check --go --i-checked-with-staff  # spoon pose, NO swing: does the ball stay?
+python pick_and_throw.py --aim-cup --cradle --go --i-checked-with-staff        # spoon throw, cups ~0.9-1.0 m
+python throw_fit.py              # how far each throw preset really goes vs its model (from Atlas)
+python scripts/latency_check.py  # command round-trip; run on laptop AND robot (docs/RUN_ON_ROBOT.md)
+python throw_safety.py           # swept-path check of every throw preset, no robot
 python main.py --go --autotune   # also correct the aim from recent misses stored in Atlas
 python main.py --go --runs 10    # 10 attempts in a row (cups surveyed + remembered first), prints N/10
 python main.py --go --cup 2      # several cups: drop into cup 2 of the survey list (1 = nearest)
@@ -95,60 +102,8 @@ configuration JSON. Each teammate should use credentials they are authorized to 
 References: [Viam Python setup](https://docs.viam.com/build-apps/setup/python/)
 and [Viam MCP server](https://docs.viam.com/reference/mcp/).
 
-## Saurabh's read-only vision tools (never move the arm)
-
-These only read the camera and arm pose; the main loop does not use them yet.
-They need `scipy` (and `requirements-yolo.txt` only for the optional YOLO backend).
-
-### Inspect the orange ball
-
-Read-only grasp analysis is in `scripts/orange_grasp.py`. It reads aligned color
-and point-cloud data, checks that arm joints remain stationary, detects round
-orange regions, fits a known-radius 20 mm sphere, and estimates a nearby support
-plane. It saves annotated images and candidate contact points. It never moves
-the arm. Candidate contacts are object geometry, not calibrated gripper TCP
-commands; the finger closing axis and contact-center offset still need verification.
-
-```bash
-python scripts/orange_grasp.py
-```
-
-### Multicolor balls on a plate (read-only CPU prototype)
-
-For known 40 mm ping-pong balls, the geometry backend uses color-independent
-circle proposals followed by a fixed-radius sphere fit in aligned RGB-D data.
-It needs no neural model or GPU. Run with the plate's image rectangle:
-
-```bash
-.conda/bin/python scripts/inspect_plate.py --backend geometry --plate-roi 570 215 920 565
-```
-
-The example rectangle is specific to the captured setup; update it when the
-plate or camera moves. The script reads the camera and arm pose, transforms
-accepted centers through Viam's configured frame tree, rejects arm movement
-during capture, and saves images and JSON under ignored `observations/`.
-It never moves the arm. `grasp_ready` and `motion_ready` remain false.
-A fitted sphere is a geometric candidate, not a semantic guarantee: plate
-patterns, occlusion, invalid depth, and other spherical objects need validation.
-The current saved scene yields four candidates matching the two white and two
-orange balls. This is a single-scene check, not validation of arbitrary piles.
-
-Do not feed these coordinates directly into the current orange-only picking
-loop. Plate/rim clearance, gripper opening and approach direction, neighbor
-collisions, and held-ball verification for other colors still need integration.
-The reported neighbor gaps are diagnostics, not a collision-free grasp plan.
-
-The optional YOLO backend is for comparison and cup/ball experiments:
-
-```bash
-.conda/bin/python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-.conda/bin/python -m pip install -r requirements-yolo.txt
-YOLO_CONFIG_DIR="$PWD/.yolo-config" MPLCONFIGDIR=/tmp/ball-toss-mpl .conda/bin/python scripts/inspect_plate.py --backend yolo --plate-roi 570 215 920 565
-```
-
-YOLO inference explicitly uses CPU. Its default pretrained YOLO11 segmentation
-model missed the ping-pong balls in the full-frame check; a diagnostic crop
-classified orange balls as fruit and missed white balls. It is therefore not
-the default plate-ball detector. If a learned detector becomes necessary,
-fine-tune with labeled images of this setup on a GPU, then validate CPU inference
-on the deployment machine. No fine-tuning has been performed.
+## Read-only vision tools
+`white_ball.py` / `scene_detection.py` find white balls from depth (used by `--ball white`).
+Saurabh's plate / grasp inspection scripts (`scripts/inspect_plate.py`, `orange_grasp.py`,
+`inspect_ball.py`) were removed from main on Oct 29 (nothing used them); they're on the
+`saurabh/read-only-tools` branch and in git history.

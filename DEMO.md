@@ -30,10 +30,20 @@ shifts its aim to correct them."
 obstacles so it can't hit the table. Detectors and 3D vision are config blocks; our logic is ~500
 lines of Python. We drove it with an AI agent through Viam's MCP server while we calibrated."
 
-## 1:50 – What's next (10 s)
-"Next: the actual throw — a fast wrist flick for cups beyond reach, tuned from the same Atlas data."
+## 1:50 – The throw (live if it's landing, else video) (40 s)
+`python pick_and_throw.py --aim-cup --cradle --go --i-checked-with-staff` (cup ~95 cm) or `--far`
+default (80-100 cm). Pick whichever landed more consistently in the morning.
+"Past ~95 cm it can't reach, so it throws. The swing was designed on the arm's kinematic model,
+checked against the table and ceiling before every throw, and the speed is picked from its own
+past throws in Atlas: `python throw_fit.py` shows model vs real landing per throw style."
+Cups: a triangle with ~2 cm of water (stops bounce-outs), front cup ~90 cm out.
+
+## 2:30 – What's next (10 s)
+"Run the throw as a Viam module on the robot computer, so any xArm team can call `throw` with a
+distance."
 
 ## Numbers to fill in before the demo
-- Hit rate: __ / __ (from `python stats.py`)
-- Furthest cup: ~95 cm
+- Drop hit rate: __ / __ (from `python stats.py`; 11/11 on Oct 29)
+- Throw: __ / __ ; FAR model vs real: x__ (`python throw_fit.py`)
+- Furthest cup hit: __ cm
 - Time per attempt: __ s (logged as `duration_s`)

@@ -1,5 +1,9 @@
 # Who does what
 
+> Oct 29 night: `balls.py` / `cups.py` were removed (never used; detection lives in
+> `pick_ball.py` / `ball_finder.py` and `cup_aim.py` / `cup_rim.py` / `cup_detection.py`).
+> Throw status: see CLAUDE.md "Throw: what we learned".
+
 **Phase 1:** pick the ball → move over the cup → drop it in.
 **Phase 2 (later):** throw.
 
@@ -83,7 +87,7 @@
 ```
 
 - `failure` is one of: `no_ball_found`, `grasp_failed`, `dropped_in_transit`, `bounced_out`, `missed`.
-- Phase 2 adds `throw: {joint_speed_deg_s, release_joint_angles, release_time_ms, distance_mm}`.
+- Phase 2 (`phase: "throw"`): `throw: {preset, distance_mm, speed_dps, release_delay_s, yaw_deg, direct, ratio, model_landing_mm, timing}`, `cup: {pos_mm, dist_mm}`, `result: {hit, outcome: in|rim_out|long|short|dropped, long_cm, left_cm}`. Oct 29 docs were back-filled with `throw.preset` (`preset_inferred: true`); junk ones have `exclude_from_fit: true`.
 - Build:
   1. `log_attempt()`.
   2. Dashboard (Atlas Charts): hit rate over time, miss scatter around the cup, pick success, failure reasons.

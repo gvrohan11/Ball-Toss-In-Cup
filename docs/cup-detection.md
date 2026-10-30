@@ -77,7 +77,7 @@ existing components/services/modules. Replace all absolute path placeholders
 and set CUP_PYTHON to that host's environment. Download weights there before
 starting. It adds `cup-detector-v2` and a `cup-boxes` transform camera. View
 **CONTROL -> cup-boxes**. The original cup-detector and cup-3d are not replaced;
-existing `cups.py`/`main.py` still use the old pipeline until explicitly integrated.
+`main.py` still uses the old pipeline until explicitly integrated.
 
 All DetectorConfig fields can be supplied as service attributes. The generated
 CLI scaffold command requires `viam login`; it was attempted but unavailable

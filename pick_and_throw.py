@@ -1,16 +1,19 @@
-"""Phase 2: pick the ball up, THEN throw it. (throw.py alone only swings: it never picks.)
+"""Phase 2: find the cup, pick the ball, THROW it, log the result to Atlas.
 
-    python pick_and_throw.py --distance 1100                       # dry run: no motion
-    python pick_and_throw.py --distance 1100 --scale 0.3 --go --i-checked-with-staff
-    python pick_and_throw.py --distance 1100 --go --i-checked-with-staff   # full throw
+    python pick_and_throw.py --aim-cup                                  # dry run: no motion
+    python pick_and_throw.py --aim-cup --go --i-checked-with-staff      # FAR throw at the cup it sees
+    python pick_and_throw.py --distance 950 --go --i-checked-with-staff # no scan: cup straight ahead
+    python pick_and_throw.py --aim-cup --power --go --i-checked-with-staff   # far cup, 1-2 m
 
-Flow: home -> set down anything held -> find + pick the ball (same code as main.py) -> check the
-gripper really holds it -> throw.py's swing -> back home -> ask where it landed -> log to Atlas
-(phase "throw", never counted in the drop hit rate).
+Flow: home -> set down anything held -> (--aim-cup) scan for the cup, aim the base at it ->
+plan + safety-check the throw BEFORE picking -> find + pick the ball -> throw -> home ->
+ask what happened -> log to Atlas (phase "throw"). throw_fit learns from these logs.
 If anything fails after the pick, the ball is put back on the table.
 """
 import argparse
 import asyncio
+import math
+import re
 import time
 
 import throw
@@ -21,21 +24,38 @@ from viam.services.motion import MotionClient
 
 HOME = dict(x=LOOK[0], y=LOOK[1], z=LOOK[2], o_x=0, o_y=0, o_z=-1, theta=THETA)
 
+PROMPT = ("Result? 'in' | 'rim' (reached the cup, bounced out) | cm long(+)/short(-), optionally "
+          "',left(+)/right(-) cm' e.g. '12' or '-8,3' | 'drop' (fell out early) | blank = skip: ")
 
-def ask_landing():
-    """+cm = long (past the cup), -cm = short, blank = skip."""
-    try:
-        s = input("Where did it land? cm past the cup (+) or short of it (-), 'in' if it went in, "
-                  "blank to skip: ").strip().lower()
-    except EOFError:
-        return None
+
+def parse_landing(s):
+    """Typed answer -> result dict (None = skip). Every miss gets an explicit outcome, so a 0 is never
+    ambiguous again (Oct 29: 34 of 69 misses were logged as long_cm 0)."""
+    s = s.strip().lower()
     if not s:
         return None
-    if s in ("in", "y", "yes"):
-        return {"hit": True}
-    import re
-    m = re.search(r"-?\d+(?:\.\d+)?", s)   # accepts "10", "-10", "10cm", "10cms"
-    return {"hit": False, "long_cm": float(m.group())} if m else None
+    if s in ("in", "y", "yes", "hit"):
+        return {"hit": True, "outcome": "in"}
+    if s.startswith(("rim", "bounce", "b")):
+        return {"hit": False, "outcome": "rim_out", "long_cm": 0.0}
+    if s.startswith(("drop", "d", "fell")):
+        return {"hit": False, "outcome": "dropped"}
+    nums = [float(x) for x in re.findall(r"-?\d+(?:\.\d+)?", s)]
+    if not nums:
+        return None
+    long_cm = nums[0]
+    res = {"hit": False, "long_cm": long_cm,
+           "outcome": "long" if long_cm > 0 else "short" if long_cm < 0 else "rim_out"}
+    if len(nums) > 1:
+        res["left_cm"] = nums[1]
+    return res
+
+
+def ask_landing():
+    try:
+        return parse_landing(input(PROMPT))
+    except EOFError:
+        return None
 
 
 async def run(args):
@@ -43,6 +63,7 @@ async def run(args):
     if args.go and not go:
         print("Refusing to throw live without --i-checked-with-staff.")
     print("MODE:", "LIVE (arm will move and throw)" if go else "DRY RUN (no motion)")
+    preset = throw.preset_from_args(args)
     t0 = time.monotonic()
     robot = await connect()
     try:
@@ -51,35 +72,33 @@ async def run(args):
         await release_if_holding(robot, motion, go)
         await move_to(motion, HOME, go, "home")
 
-        yaw = args.yaw
+        cup_doc, distance, yaw = None, args.distance, args.yaw
         if args.aim_cup:
             from main import scan_for_cup
             import cup_aim
-            cup_aim.MAX_CUP_REACH_MM = 1150   # throws can go past the arm's drop reach (cup seen at 955 mm)
-            print("0) find cup (to aim the lob)")
+            cup_aim.MAX_CUP_REACH_MM = 2300   # throws reach past the drop reach
+            print("0) find the cup")
             cup = await scan_for_cup(motion, robot, go)
+            await move_to(motion, HOME, go, "home")
             if cup is None:
                 print("no cup found - not throwing")
                 return
-            preset = next((n for n in ("power", "pitch", "whip", "far") if getattr(args, n, False)), None)
-            yaw = throw.yaw_for_cup(cup[0], cup[1], warn=preset is None)
-            import math
-            cup_dist = math.hypot(cup[0], cup[1])
-            if preset:
-                lo, hi = throw.PRESETS[preset]["table"][0][1] - 60, throw.PRESETS[preset]["table"][-1][1] + 40
-                if not lo <= cup_dist <= hi and not getattr(args, "force_aim", False) and args.speed is None:
-                    print(f"cup is {cup_dist:.0f} mm from the base; --{preset} reaches {lo}-{hi} mm. Move the cup, "
-                          "or use --force-aim.")
-                    await move_to(motion, HOME, go, "home")
-                    return
-                args.distance = cup_dist
-            elif abs(math.hypot(cup[0], cup[1]) - throw.LOB_RELEASE_RADIUS_MM) > 80 and not getattr(args, "force_aim", False):
-                print(f"cup is {math.hypot(cup[0], cup[1]):.0f} mm from the base but the lob only lands "
-                      f"~{throw.LOB_RELEASE_RADIUS_MM} mm out: not picking or throwing. Move the cup to ~48 cm "
-                      "from the base (measure with a tape), or use --force-aim to throw anyway.")
-                await move_to(motion, HOME, go, "home")
-                return
+            yaw = throw.yaw_for_cup(cup[0], cup[1])
+            distance = math.hypot(cup[0], cup[1])
+            cup_doc = {"pos_mm": list(cup), "dist_mm": round(distance)}
+        if distance is None:
+            print("give --distance (mm from the base) or --aim-cup")
+            return
+
+        pl = throw.plan_from_args(args, distance, yaw)   # raises before anything is picked if unsafe
+        lo, hi = throw.reach_mm(preset, pl["ratio"])
+        if not lo <= distance <= hi and args.speed is None and not args.force_aim:
+            hint = "try --power" if preset == "far" and distance > hi else (
+                "drop --power" if preset == "power" else "move the cup")
+            print(f"cup is {distance:.0f} mm from the base; {preset.upper()} reaches {lo}-{hi} mm: "
+                  f"{hint}, or --force-aim.")
             await move_to(motion, HOME, go, "home")
+            return
 
         print("1) find ball")
         ball = await find_ball(robot, motion, go)
@@ -96,29 +115,23 @@ async def run(args):
         try:
             print("3) throw")
             await move_to(motion, HOME, go, "home")
-            preset = next((n for n in ("power", "pitch", "whip", "far") if getattr(args, n, False)), None)
-            if preset:
-                fp = throw.far_params(args.distance, args.speed, args.accel, args.release_delay, preset)
-                info = await throw.throw(robot, args.distance, go, args.scale, not args.no_release,
-                                         fp["release_delay_s"], fp["swing_deg"], fp["speed_dps"], fp["accel_dps2"],
-                                         None, fp["start_j"], yaw, fp["gripper_speed"],
-                                         getattr(args, "direct", False) or fp["direct"])
-            else:
-                info = await throw.throw(robot, args.distance, go, args.scale, not args.no_release,
-                                         args.release_delay, throw.swing_from_args(args), args.speed, args.accel,
-                                         args.wind_z, throw.LOB_START_J if args.lob else None, yaw, None,
-                                         getattr(args, "direct", False))
+            info = await throw.throw(robot, pl, go, not args.no_release, True if args.direct else None,
+                                     partial=args.partial, check_only=args.cradle_check)
         except BaseException as e:  # error or Ctrl+C: don't leave the ball in the gripper
             print(f"!! stopped ({type(e).__name__}: {e}); putting the ball back")
             await asyncio.sleep(2.0)  # after a controller stop the arm refuses commands for a moment
             await put_ball_back(robot, motion, ball, go)
             raise
         await move_to(motion, HOME, go, "home")
+        if go and args.cradle_check:
+            print("cradle check done: did the ball stay in? were the fingers above/below it? (not logged)")
+            await put_ball_back(robot, motion, ball, go)
+            return
         if go:
             landing = ask_landing()
-            doc = {"phase": "throw", "ball": {"pos_mm": ball}, "throw": info,
+            doc = {"phase": "throw", "ball": {"pos_mm": ball}, "cup": cup_doc, "throw": info,
                    "duration_s": round(time.monotonic() - t0, 1),
-                   "result": landing or {"hit": None}}
+                   "result": landing or {"hit": None, "outcome": "not_recorded"}}
             try:
                 import logger
                 logger.log_attempt(doc)
@@ -129,31 +142,10 @@ async def run(args):
 
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--distance", type=float, required=True, help="cup distance from base, mm")
-    ap.add_argument("--scale", type=float, default=1.0)
-    ap.add_argument("--no-release", action="store_true")
-    ap.add_argument("--speed", type=float, default=None, help="swing speed deg/s (default 150, max 180)")
-    ap.add_argument("--accel", type=float, default=None, help="swing accel deg/s2 (default 900, max 1145)")
-    ap.add_argument("--wind-z", type=float, default=None, help="wind-up height mm (default 450; try 650 for a lob)")
-    ap.add_argument("--lob", action="store_true", help="near-vertical full-speed toss (cup ~50 cm from the base)")
-    ap.add_argument("--yaw", type=float, default=0.0, help="turn the lob toward +y by this many deg (--lob only)")
-    ap.add_argument("--far", action="store_true",
-                    help="open-hand forward toss for a cup 84-98 cm out (with --aim-cup the speed comes from the cup distance)")
-    ap.add_argument("--power", action="store_true", help="full-force throw (always direct mode)")
-    ap.add_argument("--direct", action="store_true", help="point-to-point mode: no ServoJ speed stop, steadier release")
-    ap.add_argument("--pitch", action="store_true", help="underhand pitch: long fast backswing, steep launch")
-    ap.add_argument("--whip", action="store_true", help="wrist-whip throw, ~2x faster, 42-53 deg up")
-    ap.add_argument("--force-aim", action="store_true", help="with --aim-cup: throw even if the cup is out of range")
-    ap.add_argument("--aim-cup", action="store_true",
-                    help="scan for the cup first and turn the lob toward it (--lob only)")
-    ap.add_argument("--j2", type=float, default=None, help="shoulder swing deg (negative = forward+down)")
-    ap.add_argument("--j3", type=float, default=None, help="elbow swing deg (default -35)")
-    ap.add_argument("--j5", type=float, default=None, help="wrist swing deg (default +45)")
-    ap.add_argument("--release-delay", type=float, default=None,
-                    help="seconds after the swing starts to open the gripper; negative = open before the swing; try -0.3 / -0.2 / -0.1")
-    ap.add_argument("--go", action="store_true")
-    ap.add_argument("--i-checked-with-staff", action="store_true")
+    ap = argparse.ArgumentParser(description="Pick the ball, then throw it at the cup.")
+    throw.add_args(ap)
+    ap.add_argument("--aim-cup", action="store_true", help="scan for the cup and aim + range the throw at it")
+    ap.add_argument("--force-aim", action="store_true", help="throw even if the cup is outside the preset's range")
     asyncio.run(run(ap.parse_args()))
 
 

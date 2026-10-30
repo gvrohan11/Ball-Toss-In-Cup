@@ -1,209 +1,190 @@
-import asyncio
 import os
 import sys
-from types import SimpleNamespace
 
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import throw  # noqa: E402
-
-WIND_UP_JOINTS = [0.0, 5.0, -48.4, 0.0, -83.4, 180.0]   # measured at WIND_UP on the real arm
-
-
-def swung(scale=1.0):
-    end = list(WIND_UP_JOINTS)
-    for j, d in throw.SWING_DEG.items():
-        end[j] += d * scale
-    return end
+import throw_fit  # noqa: E402
+import throw_safety  # noqa: E402
 
 
-def test_default_swing_is_inside_joint_limits():
-    throw.check_limits(WIND_UP_JOINTS, swung())
+@pytest.mark.parametrize("preset", list(throw.PRESETS))
+@pytest.mark.parametrize("yaw", [-40, 0, 40])
+def test_presets_clear_limits_and_obstacles(preset, yaw):
+    pl = throw.plan(1000, preset, yaw_deg=yaw)          # raises if unsafe
+    assert pl["preset"] == preset and pl["speed_dps"] <= throw.MAX_SPEED
 
 
-def test_old_draft_swing_was_out_of_limits():
-    end = list(WIND_UP_JOINTS)
-    end[2] += -35
-    end[4] += -45                  # the draft's wrist direction: backward AND past -124 deg
+def test_far_is_servo_power_is_direct():
+    assert throw.plan(900)["direct"] is False
+    assert throw.plan(1500, "power")["direct"] is True
+
+
+def test_speed_follows_table_and_learned_ratio():
+    assert abs(throw.speed_for(953, "far") - 165) < 0.5
+    assert throw.speed_for(5000, "far") == 180.0
+    assert throw.speed_for(100, "far") == throw.FAR["min_speed"]
+    # ball flies 10 % farther than the model -> same cup needs less speed
+    assert throw.speed_for(953, "far", ratio=1.1) < 150
+    for s in (105, 140, 180):
+        assert abs(throw.speed_for(throw.model_landing(s, "far"), "far") - s) < 1e-6
+
+
+def test_far_never_opens_before_the_swing_power_never_before_start():
+    for s in (100, 140, 180):
+        assert throw.release_delay(s, "far") >= 0.10
+        assert throw.release_delay(s, "power") >= 0.0
+
+
+def test_unsafe_requests_are_refused():
     with pytest.raises(ValueError):
-        throw.check_limits(WIND_UP_JOINTS, end)
-
-
-def test_directions_are_the_measured_ones():
-    assert throw.SWING_DEG[2] < 0 and throw.SWING_DEG[4] > 0
-
-
-def test_scale_validated_and_dry_run_moves_nothing(monkeypatch):
-    for cls in (throw.MotionClient, throw.Arm, throw.Gripper):
-        monkeypatch.setattr(cls, "from_robot", staticmethod(lambda r, n: object()))
+        throw.plan(900, yaw_deg=60)
     with pytest.raises(ValueError):
-        asyncio.run(throw.throw(object(), 1000, False, scale=2.0))
-    out = asyncio.run(throw.throw(object(), 1000, False, scale=0.3))
-    assert out["dry_run"] is True
-
-
-def test_release_delay_interpolates():
-    assert throw.release_delay(1000) == pytest.approx(-0.225)
-    assert throw.release_delay(500) == -0.25 and throw.release_delay(2000) == -0.15
-
-
-def test_wind_up_does_not_turn_the_wrist():
-    assert throw.WIND_UP["theta"] == 0      # theta=180 spun J6 by 180 deg before every throw
-
-
-def test_release_delay_override_validated(monkeypatch):
-    for cls in (throw.MotionClient, throw.Arm, throw.Gripper):
-        monkeypatch.setattr(cls, "from_robot", staticmethod(lambda r, n: object()))
+        throw.plan(900, speed=250)
     with pytest.raises(ValueError):
-        asyncio.run(throw.throw(object(), 1100, False, release_delay_s=1.5))
-    out = asyncio.run(throw.throw(object(), 1100, False, release_delay_s=0.0))
-    assert out["release_delay_s"] == 0.0
-
-
-def test_negative_delay_opens_before_swing(monkeypatch):
-    """Open command first (gripper lags ~0.4 s), swing starts |delay| later."""
-    order = []
-
-    class G:
-        async def open(self):
-            order.append("open")
-
-    class A:
-        async def get_joint_positions(self):
-            return type("J", (), {"values": [0, 5, -48.4, 0, -83.4, 0]})()
-
-        async def do_command(self, c):
-            return {}
-
-        async def move_to_joint_positions(self, j, extra=None):
-            order.append("swing")
-
-    class M:
-        async def move(self, *a, **k):
-            return True
-
-    monkeypatch.setattr(throw.MotionClient, "from_robot", staticmethod(lambda r, n: M()))
-    monkeypatch.setattr(throw.Arm, "from_robot", staticmethod(lambda r, n: A()))
-    monkeypatch.setattr(throw.Gripper, "from_robot", staticmethod(lambda r, n: G()))
-    out = asyncio.run(throw.throw(object(), 1100, True, scale=1.0, release=True, release_delay_s=-0.05))
-    assert order == ["open", "swing"] and out["released"] is True
-
-
-def test_swing_overrides_and_limits(monkeypatch):
-    a = SimpleNamespace(j2=-20.0, j3=None, j5=50.0)
-    assert throw.swing_from_args(a) == {1: -20.0, 2: -35, 4: 50.0}
-    for cls in (throw.MotionClient, throw.Arm, throw.Gripper):
-        monkeypatch.setattr(cls, "from_robot", staticmethod(lambda r, n: object()))
-    out = asyncio.run(throw.throw(object(), 1100, False, swing_deg={1: -20, 2: -35, 4: 45}, speed_dps=180, accel_dps2=1100))
-    assert out["dry_run"] is True
+        throw.plan(900, scale=2)
     with pytest.raises(ValueError):
-        asyncio.run(throw.throw(object(), 1100, False, speed_dps=400))
+        throw.plan(900, "whip")
 
 
-def test_wind_z_validated(monkeypatch):
-    for cls in (throw.MotionClient, throw.Arm, throw.Gripper):
-        monkeypatch.setattr(cls, "from_robot", staticmethod(lambda r, n: object()))
-    with pytest.raises(ValueError):
-        asyncio.run(throw.throw(object(), 1100, False, wind_z=1500))
-    assert asyncio.run(throw.throw(object(), 1100, False, wind_z=650))["dry_run"] is True
+def test_path_check_catches_a_swing_into_the_table():
+    start = [0, -57.4, -65.5, 0, -79.5, 0]              # POWER start: ball 9 cm above the table plane
+    down = [0, -77.4, -65.5, 0, -79.5, 0]               # shoulder 20 deg further back: ball reaches z~8
+    probs = throw_safety.path_problems(start, down)
+    assert probs and "table" in probs[0]
+    with pytest.raises(RuntimeError):
+        throw.check_path(start, down, "swing")
 
 
-def test_lob_swing_is_inside_limits_and_goes_up():
-    start = [0.0, throw.LOB_START_J[0], throw.LOB_START_J[1], 0.0, throw.LOB_START_J[2], 0.0]
-    end = list(start)
-    for j, d in throw.LOB_SWING.items():
-        end[j] += d
-    throw.check_limits(start, end)
-    assert end[1] > start[1] and end[2] < start[2]      # shoulder back/up, elbow up
+def test_path_check_uses_the_live_ceiling():
+    assert throw_safety.CEILING_Z == 1200
 
 
-def test_lob_dry_run(monkeypatch):
-    for cls in (throw.MotionClient, throw.Arm, throw.Gripper):
-        monkeypatch.setattr(cls, "from_robot", staticmethod(lambda r, n: object()))
-    out = asyncio.run(throw.throw(object(), 500, False, swing_deg=throw.LOB_SWING, start_j=throw.LOB_START_J))
-    assert out["dry_run"] is True
-    a = SimpleNamespace(j2=None, j3=None, j5=None, lob=True)
-    assert throw.swing_from_args(a) == throw.LOB_SWING
-
-
-def test_lob_default_speed_is_below_the_controller_limit(monkeypatch):
-    for cls in (throw.MotionClient, throw.Arm, throw.Gripper):
-        monkeypatch.setattr(cls, "from_robot", staticmethod(lambda r, n: object()))
-    # peak gripper speed ~ 2.79 m/s * speed/180; 180 deg/s tripped the xArm limit, so stay well under it
-    assert throw.LOB_SPEED_DPS <= 130
-    out = asyncio.run(throw.throw(object(), 500, False, swing_deg=throw.LOB_SWING, start_j=throw.LOB_START_J))
-    assert out["dry_run"] is True
-
-
-def test_yaw_for_cup_points_at_cup(capsys):
+def test_yaw_for_cup_points_at_cup():
     assert abs(throw.yaw_for_cup(480, 0)) < 1e-9
     assert abs(throw.yaw_for_cup(480, 480) - 45) < 1e-6
     assert throw.yaw_for_cup(480, -85) < 0
 
 
-def test_yaw_needs_lob_and_is_limited(monkeypatch):
-    for cls in (throw.MotionClient, throw.Arm, throw.Gripper):
-        monkeypatch.setattr(cls, "from_robot", staticmethod(lambda r, n: object()))
-    with pytest.raises(ValueError):
-        asyncio.run(throw.throw(object(), 500, False, yaw_deg=10))
-    with pytest.raises(ValueError):
-        asyncio.run(throw.throw(object(), 500, False, swing_deg=throw.LOB_SWING, start_j=throw.LOB_START_J, yaw_deg=60))
-    out = asyncio.run(throw.throw(object(), 500, False, swing_deg=throw.LOB_SWING, start_j=throw.LOB_START_J, yaw_deg=12))
-    assert out["dry_run"] is True
+def doc(preset, speed, cup, **result):
+    return {"phase": "throw", "throw": {"preset": preset, "throw_speed": speed, "distance_mm": cup, "scale": 1},
+            "result": {"hit": result.pop("hit", False), **result}}
 
 
-def test_far_swing_inside_limits_and_speed_table():
-    start = [0.0, throw.FAR_START_J[0], throw.FAR_START_J[1], 0.0, throw.FAR_START_J[2], 0.0]
-    end = list(start)
-    for j, d in throw.FAR_SWING.items():
-        end[j] += d
-    throw.check_limits(start, end)
-    assert abs(throw.far_speed_for(983) - 180) < 1e-6
-    assert 105 < throw.far_speed_for(850) < 120
-    assert throw.far_speed_for(5000) == 180.0
-    assert throw.far_speed_for(100) >= 100.0
-    # open command goes out before the arm starts braking (fingers lag ~0.3 s)
-    assert -0.3 < throw.far_release_delay(180) < 0.0
+def test_landing_rules():
+    assert throw_fit.landing_mm(doc("far", 180, 786, long_cm=20)) == 986
+    assert throw_fit.landing_mm(doc("far", 165, 955, long_cm=0)) is None         # legacy 0 = not measured
+    assert throw_fit.landing_mm(doc("far", 165, 955, long_cm=0, outcome="rim_out")) == 955
+    assert throw_fit.landing_mm(doc("far", 165, 955, hit=True)) == 955
+    assert throw_fit.landing_mm(doc("far", 165, 955, outcome="dropped")) is None
+    assert throw_fit.landing_mm(doc("power", 180, 10, long_cm=50)) is None       # hand-typed bogus distance
+    d = doc("far", 165, 955, long_cm=12)
+    d["exclude_from_fit"] = True
+    assert throw_fit.landing_mm(d) is None
 
 
-def test_far_dry_run(monkeypatch):
-    for cls in (throw.MotionClient, throw.Arm, throw.Gripper):
-        monkeypatch.setattr(cls, "from_robot", staticmethod(lambda r, n: object()))
-    fp = throw.far_params(850)
-    out = asyncio.run(throw.throw(object(), 850, False, 1.0, True, fp["release_delay_s"], fp["swing_deg"],
-                                  fp["speed_dps"], fp["accel_dps2"], None, fp["start_j"], -9.1, fp["gripper_speed"]))
-    assert out["dry_run"] is True
+def test_fit_uses_median_and_needs_data():
+    m = throw.model_landing(180, "far")
+    docs = [doc("far", 180, round(m * 1.1), hit=True) for _ in range(4)] + [doc("far", 180, 400, long_cm=200)]
+    assert abs(throw_fit.fit(docs, "far") - 1.1) < 0.01         # one wild throw doesn't move the median
+    assert throw_fit.fit(docs[:2], "far") == 1.0                 # too few throws
+    assert throw_fit.fit(docs, "power") == 1.0                   # other preset's data ignored
+    wild = [doc("far", 180, round(m * 2), hit=True) for _ in range(5)]
+    assert throw_fit.fit(wild, "far") == throw_fit.CLAMP[1]
 
 
-def test_whip_inside_limits_and_faster_table():
-    start = [0.0, throw.WHIP_START_J[0], throw.WHIP_START_J[1], 0.0, throw.WHIP_START_J[2], 0.0]
-    end = list(start)
-    for j, d in throw.WHIP_SWING.items():
-        end[j] += d
-    throw.check_limits(start, end)
-    assert 90 <= throw.far_speed_for(850, "whip") < 110
-    assert throw.far_speed_for(5000, "whip") == 180.0
-    fp = throw.far_params(850, preset="whip")
-    assert fp["start_j"] == throw.WHIP_START_J and fp["gripper_speed"] == 5000
+# ---- cradle flow on a fake robot: open BEFORE the swing, nothing during it ----
+import asyncio  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+
+HOME_J = [0.0, 13.26, -44.18, 0.0, -57.29, 0.0]
 
 
-def test_pitch_inside_limits():
-    start = [0.0, throw.PITCH_START_J[0], throw.PITCH_START_J[1], 0.0, throw.PITCH_START_J[2], 0.0]
-    end = list(start)
-    for j, d in throw.PITCH_SWING.items():
-        end[j] += d
-    throw.check_limits(start, end)
-    assert 160 < throw.far_speed_for(892, "pitch") <= 180
-    assert throw.far_release_delay(170, preset="pitch") > 0.1
+class FakeArm:
+    def __init__(self, log):
+        self.log, self.q = log, list(HOME_J)
+
+    async def get_end_position(self):
+        return SimpleNamespace(x=350.5, y=0.0, z=550.7)
+
+    async def get_joint_positions(self):
+        return SimpleNamespace(values=list(self.q))
+
+    async def move_to_joint_positions(self, jp, extra=None):
+        self.log.append(("move", [round(v, 1) for v in jp.values], extra))
+        self.q = list(jp.values)
+
+    async def do_command(self, cmd):
+        self.log.append(("arm_cmd", cmd))
+        return {}
 
 
-def test_power_preset_is_direct_and_inside_limits():
-    start = [0.0, throw.POWER_START_J[0], throw.POWER_START_J[1], 0.0, throw.POWER_START_J[2], 0.0]
-    end = list(start)
-    for j, d in throw.POWER_SWING.items():
-        end[j] += d
-    throw.check_limits(start, end)
-    fp = throw.far_params(955, preset="power")
-    assert fp["direct"] is True and 60 < fp["speed_dps"] < 80
-    assert throw.far_params(955, preset="whip")["direct"] is False
+class FakeGripper:
+    def __init__(self, log):
+        self.log = log
+
+    async def do_command(self, cmd):
+        self.log.append(("grip_cmd", cmd))
+        return {"pos": 372} if "get" in cmd else {}
+
+    async def open(self):
+        self.log.append(("open",))
+
+    async def grab(self):
+        self.log.append(("grab",))
+
+
+@pytest.fixture
+def fake(monkeypatch):
+    log = []
+    arm, grip = FakeArm(log), FakeGripper(log)
+    monkeypatch.setattr(throw.Arm, "from_robot", staticmethod(lambda r, n: arm))
+    monkeypatch.setattr(throw.Gripper, "from_robot", staticmethod(lambda r, n: grip))
+
+    class Motion:
+        async def move(self, *a, **k):
+            log.append(("home",))
+            return True
+    monkeypatch.setattr(throw.MotionClient, "from_robot", staticmethod(lambda r, n: Motion()))
+    real_sleep = asyncio.sleep
+    monkeypatch.setattr(throw.asyncio, "sleep", lambda s: real_sleep(0))
+    return log
+
+
+def test_cradle_opens_partially_at_swing_start(fake):
+    pl = throw.plan(960, "cradle")
+    assert pl["release_delay_s"] == 0.0 and 165 <= pl["speed_dps"] <= 180
+    out = asyncio.run(throw.throw(object(), pl, True))
+    moves = [i for i, e in enumerate(fake) if e[0] == "move"]
+    sets = [i for i, e in enumerate(fake) if e[0] == "grip_cmd" and "set" in e[1]]
+    assert len(moves) == 2 and sets and sets[0] > moves[1]           # open goes out right after the swing starts
+    assert ("open",) not in fake                                       # never a full open
+    assert fake[sets[0]][1]["set"] == 372 + throw.CRADLE_OPEN_DELTA
+    assert fake[moves[0]][1][5] == throw.CRADLE["j6"]                  # wrist rolled: fingers above/below
+    assert ("grip_cmd", {"set_gripper_speed": throw.GRIPPER_SPEED}) in fake
+    last_arm = [e for e in fake if e[0] == "arm_cmd"][-1]
+    assert last_arm == ("arm_cmd", {"set_speed": throw.NORMAL_SPEED})  # speed restored
+    assert out["release_mode"] == "cradle" and out["held_pos"] == 372
+
+
+def test_cradle_only_near_full_speed():
+    assert throw.speed_for(800, "cradle") == 165.0
+    lo, hi = throw.reach_mm("cradle")
+    assert lo < 953 and hi > 983 and hi < 1100
+
+
+def test_cradle_check_never_swings(fake):
+    pl = throw.plan(1100, "cradle")
+    out = asyncio.run(throw.throw(object(), pl, True, check_only=True))
+    moves = [e for e in fake if e[0] == "move"]
+    assert len(moves) == 2 and moves[1][1] == [round(v, 1) for v in HOME_J]   # wind-up, then straight back
+    assert ("grab",) in fake and out["check_only"] is True
+    assert not any(e[0] == "arm_cmd" and "set_acceleration" in e[1] for e in fake)
+
+
+def test_partial_open_uses_set_not_open(fake):
+    pl = throw.plan(900, "far")
+    asyncio.run(throw.throw(object(), pl, True, partial=True))
+    assert ("open",) not in fake
+    assert ("grip_cmd", {"set": float(372 + throw.PARTIAL_OPEN_DELTA)}) in fake
