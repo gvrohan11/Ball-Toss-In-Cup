@@ -59,7 +59,7 @@ async def run(args):
             if cup is None:
                 print("no cup found - not throwing")
                 return
-            preset = "whip" if getattr(args, "whip", False) else ("far" if getattr(args, "far", False) else None)
+            preset = next((n for n in ("pitch", "whip", "far") if getattr(args, n, False)), None)
             yaw = throw.yaw_for_cup(cup[0], cup[1], warn=preset is None)
             import math
             cup_dist = math.hypot(cup[0], cup[1])
@@ -94,9 +94,9 @@ async def run(args):
         try:
             print("3) throw")
             await move_to(motion, HOME, go, "home")
-            if getattr(args, "far", False) or getattr(args, "whip", False):
-                fp = throw.far_params(args.distance, args.speed, args.accel, args.release_delay,
-                                      "whip" if getattr(args, "whip", False) else "far")
+            preset = next((n for n in ("pitch", "whip", "far") if getattr(args, n, False)), None)
+            if preset:
+                fp = throw.far_params(args.distance, args.speed, args.accel, args.release_delay, preset)
                 info = await throw.throw(robot, args.distance, go, args.scale, not args.no_release,
                                          fp["release_delay_s"], fp["swing_deg"], fp["speed_dps"], fp["accel_dps2"],
                                          None, fp["start_j"], yaw, fp["gripper_speed"])
@@ -136,6 +136,7 @@ def main():
     ap.add_argument("--yaw", type=float, default=0.0, help="turn the lob toward +y by this many deg (--lob only)")
     ap.add_argument("--far", action="store_true",
                     help="open-hand forward toss for a cup 84-98 cm out (with --aim-cup the speed comes from the cup distance)")
+    ap.add_argument("--pitch", action="store_true", help="underhand pitch: long fast backswing, steep launch")
     ap.add_argument("--whip", action="store_true", help="wrist-whip throw, ~2x faster, 42-53 deg up")
     ap.add_argument("--force-aim", action="store_true", help="with --aim-cup: throw even if the cup is out of range")
     ap.add_argument("--aim-cup", action="store_true",
