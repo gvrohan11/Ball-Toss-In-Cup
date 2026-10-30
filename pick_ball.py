@@ -60,9 +60,6 @@ HOLDING_MIN_POS = 50        # gripper position below this after closing = closed
 NORMAL_SPEED_DEG_S = 60     # speed_degs_per_sec in the sfhack11 arm config
 PICK_SPEED_DEG_S = 15
 SETTLE_S = 0.5              # let the arm stop swaying at GRAB_Z before closing
-LOOK_SETTLE_S = 0.5         # before a camera look: close-ups taken on arrival were motion-blurred
-CLOSEUP_READINGS = 3        # close-up frames per measurement; the median position is used
-CLOSEUP_SPREAD_MM = 6       # readings farther apart than this: the arm/ball was still moving
 
 
 def pose(x, y, z):
@@ -134,24 +131,11 @@ async def _color_and_depth(cam):
     return bgr, depth
 
 
-def _ball_items(balls, frame=None):
-    """Detection-log entries for ball candidates (touching ones are skipped by the picker):
-    how each was found (edge_fit / hough / yolo_mask), YOLO's confidence, the shadow/blur
-    bulge and a sharpness score, so a bad pick can be traced to the frame."""
-    from ball_finder import sharpness
-    items = []
-    for b in balls:
-        it = {"kind": "ball", "circle": (b["u"], b["v"], b["r"]), "color": b.get("color"),
-              "kept": not b.get("touching", False)}
-        if b.get("touching"):
-            it["why"] = "touching another ball"
-        for k in ("method", "yolo", "bulge_px", "fill"):
-            if b.get(k) is not None:
-                it[k] = b[k]
-        if frame is not None:
-            it["sharpness"] = round(sharpness(frame, b["u"], b["v"], b["r"]), 1)
-        items.append(it)
-    return items
+def _ball_items(balls):
+    """Detection-log entries for ball candidates (touching ones are skipped by the picker)."""
+    return [{"kind": "ball", "circle": (b["u"], b["v"], b["r"]), "color": b.get("color"),
+             "kept": not b.get("touching", False),
+             **({"why": "touching another ball"} if b.get("touching") else {})} for b in balls]
 
 
 def _chose(items, i, hit):
@@ -273,7 +257,7 @@ async def locate_ball(robot, prefer_center=False):
         raise ValueError("Camera is too low to look for balls")
     expected_r = k.focal_x_px * (BALL_DIAMETER_MM / 2) / dist
     balls = find_balls(frame, expected_r)
-    items = _ball_items(balls, frame)
+    items = _ball_items(balls)
     meta = dict(expected_r_px=round(expected_r, 1), closeup=prefer_center)
     alone = [b for b in balls if not b["touching"]]
     if balls and not alone:
@@ -309,39 +293,15 @@ async def locate_ball(robot, prefer_center=False):
     return (x, y, z)
 
 
-async def closeup(robot, go):
-    """Ball position from CLOSEUP_READINGS close-up frames (camera centered over it): the
-    median, after LOOK_SETTLE_S. None if the ball is seen in fewer than 2 frames."""
-    if go:
-        await asyncio.sleep(LOOK_SETTLE_S)
-    seen = []
-    for _ in range(CLOSEUP_READINGS if go else 1):
-        p = await locate_ball(robot, prefer_center=True)
-        if p is not None:
-            seen.append(p)
-    if len(seen) < min(2, CLOSEUP_READINGS if go else 1):
-        print(f"  close-up: ball seen in {len(seen)}/{CLOSEUP_READINGS} frames; not trusting it")
-        return None
-    med = tuple(sorted(v)[len(v) // 2] for v in zip(*seen))
-    spread = max(math.hypot(p[0] - med[0], p[1] - med[1]) for p in seen)
-    print(f"  close-up: {len(seen)} readings, spread {spread:.1f} mm")
-    if spread > CLOSEUP_SPREAD_MM:
-        print(f"  close-up readings disagree by {spread:.0f} mm (still moving?); using the median")
-    detection_log.event("closeup", readings=seen, median_mm=med, spread_mm=round(spread, 1))
-    return med
-
-
 async def find_ball(robot, motion, go):
     """Coarse look, then center the camera over the ball for an accurate fix."""
     await move(motion, *LOOK, go)
-    if go:
-        await asyncio.sleep(LOOK_SETTLE_S)
     coarse = await locate_ball(robot)
     if coarse is None:
         return None
     print(f"  coarse ball: {coarse[0]:.0f}, {coarse[1]:.0f}, {coarse[2]:.0f}")
     await move(motion, coarse[0] + CAM_OFFSET_XY[0], coarse[1] + CAM_OFFSET_XY[1], MEASURE_HEIGHT_Z, go)
-    fine = await closeup(robot, go) if go else coarse
+    fine = await locate_ball(robot, prefer_center=True) if go else coarse
     if fine is None:
         return None
     jump = math.hypot(fine[0] - coarse[0], fine[1] - coarse[1])
@@ -421,7 +381,7 @@ async def look_again(robot, ball, go):
     await _open_and_lift(robot, ball, go)
     await move(motion, ball[0] - CAM_CORRECTION_MM[0] + CAM_OFFSET_XY[0],
                ball[1] - CAM_CORRECTION_MM[1] + CAM_OFFSET_XY[1], MEASURE_HEIGHT_Z, go)
-    seen = await closeup(robot, go)
+    seen = await locate_ball(robot, prefer_center=True)
     if seen is None:
         print("  no ball under the camera any more")
         return None
@@ -451,10 +411,6 @@ async def grab_at(robot, ball, go):
         await gripper.grab()
         pos = await wait_gripper(gripper)
         print(f"  gripper closed at position {pos}")
-        outcome = ("closed on nothing" if pos is not None and pos <= HOLDING_MIN_POS else
-                   "blocked" if pos is not None and pos >= GRIP_BLOCKED_POS else "closed on something")
-        detection_log.event("grab", target_mm=(x, y, GRAB_Z), finger_pos=pos, outcome=outcome,
-                            cam_correction_mm=CAM_CORRECTION_MM)
         if pos is not None and pos <= HOLDING_MIN_POS:
             print("  gripper closed on nothing; not lifting")
             return False

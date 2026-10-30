@@ -144,7 +144,7 @@ def frame_with(monkeypatch):
     monkeypatch.setattr(cup_detection, "CUP_CORRECTION_MM", (5.0, -5.0))   # test value, not the real one
 
     def setup(rim_items, yolo_items):
-        async def rim(robot, topdown, seen, frame=None):
+        async def rim(robot, topdown, seen):
             seen["items"] += rim_items
             return [tuple(i["world_mm"]) for i in rim_items if i.get("kept")]
 
@@ -176,7 +176,7 @@ def test_without_yolo_it_is_rim_only_and_says_so_once(monkeypatch, capsys):
     monkeypatch.setattr(cup_aim, "USE_YOLO", True)
     monkeypatch.setattr(cup_aim, "_yolo_off", None)
 
-    async def rim(robot, topdown, seen, frame=None):
+    async def rim(robot, topdown, seen):
         seen["items"].append({"kind": "rim", "box": (0, 0, 10, 10), "kept": True, "world_mm": (700, 0, 110)})
         return [(700, 0, 110)]
 
@@ -209,29 +209,3 @@ def test_real_frame_paper_cup_and_cans_rejected():
 def test_yolo_correction_matches_measured_offset():
     """Set from 163 rim/YOLO shared sightings on sfhack11; (0, 0) made duplicate cups."""
     assert cup_detection.CUP_CORRECTION_MM == (-54.0, 22.0)
-
-
-def test_rim_and_yolo_judge_the_same_frame(monkeypatch):
-    """The rim method must use YOLO's captured frame, not grab a second one."""
-    import detection_log
-    detection_log.stop()
-    monkeypatch.setattr(cup_aim, "USE_YOLO", True)
-    monkeypatch.setattr(cup_aim, "_yolo_off", None)
-    yolo_frame = np.zeros((4, 4, 3), np.uint8)
-    got = {}
-
-    async def yolo(robot, *, seen=None, **kw):
-        seen.update(items=[], frame=yolo_frame, depth=None)
-
-    async def rim(robot, topdown, seen, frame=None):
-        got["frame"] = frame
-        return []
-
-    async def no_red(robot, items):
-        return []
-
-    monkeypatch.setattr(cup_detection, "find_cups", yolo)
-    monkeypatch.setattr(cup_aim, "find_cups_by_rim", rim)
-    monkeypatch.setattr(cup_aim, "_cups_from_red_bodies", no_red)
-    asyncio.run(cup_aim.find_cups(object(), topdown=True))
-    assert got["frame"] is yolo_frame
