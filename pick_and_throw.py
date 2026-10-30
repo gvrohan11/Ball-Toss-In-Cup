@@ -34,28 +34,32 @@ HOME = dict(x=LOOK[0], y=LOOK[1], z=LOOK[2], o_x=0, o_y=0, o_z=-1, theta=THETA)
 MAX_TRIES_PER_CUP = 3     # misses at one cup before --fill-cups moves on to the next
 MAX_PICK_FAILS = 3        # failed picks in a row before stopping
 
-PROMPT = ("Result? 'in' (target) or 'in 3' (went into cup 3) | 'rim' (reached the cup, bounced out) | "
+PROMPT = ("Result? 'in' (target) or 'in 3' (went into cup 3) | 'rim' or 'rim 3' (bounced out) | "
           "cm long(+)/short(-), optionally ',left(+)/right(-) cm' e.g. '12' or '-8,3' | "
           "'drop' (fell out early) | blank = skip: ")
 
 
 def parse_landing(s):
     """Typed answer -> result dict (None = skip). Every miss gets an explicit outcome, so a 0 is never
-    ambiguous again (Oct 29: 34 of 69 misses were logged as long_cm 0)."""
+    ambiguous again (Oct 29: 34 of 69 misses were logged as long_cm 0).
+    Plain phrases work: "in", "in 3", "hit number 1", "went in cup 2", "rim", "rim of 4", "drop"."""
     s = s.strip().lower()
     if not s:
         return None
-    m = re.fullmatch(r"(?:in|y|yes|hit)(?:\s*(?:cup)?\s*#?(\d+))?", s)
-    if m:
-        res = {"hit": True, "outcome": "in"}
-        if m.group(1):
-            res["cup_number"] = int(m.group(1))
-        return res
-    if s.startswith(("rim", "bounce", "b")):
-        return {"hit": False, "outcome": "rim_out", "long_cm": 0.0}
-    if s.startswith(("drop", "d", "fell")):
-        return {"hit": False, "outcome": "dropped"}
+    words = re.findall(r"[a-z]+", s)
     nums = [float(x) for x in re.findall(r"-?\d+(?:\.\d+)?", s)]
+    if "rim" in words or any(w.startswith("bounce") for w in words):
+        res = {"hit": False, "outcome": "rim_out", "long_cm": 0.0}
+        if nums:
+            res["rim_cup"] = int(abs(nums[0]))
+        return res
+    if any(w in ("drop", "dropped", "fell", "dribble", "dribbled") for w in words) or s in ("d",):
+        return {"hit": False, "outcome": "dropped"}
+    if any(w in ("in", "y", "yes", "hit", "inside", "made", "score", "scored") for w in words):
+        res = {"hit": True, "outcome": "in"}
+        if nums:
+            res["cup_number"] = int(abs(nums[0]))
+        return res
     if not nums:
         return None
     long_cm = nums[0]

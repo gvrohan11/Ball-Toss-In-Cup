@@ -255,3 +255,14 @@ def test_no_release_run_never_asks_or_logs(rig, monkeypatch):
     monkeypatch.setattr(pt, "ask_landing", lambda: (_ for _ in ()).throw(AssertionError("asked")))
     asyncio.run(pt.run(args(aim_cup=True, cradle=True, no_release=True, distance=None)))
     assert len(plans) == 1 and logged == []
+
+
+def test_plain_phrases():
+    assert pt.parse_landing("hit number 1") == {"hit": True, "outcome": "in", "cup_number": 1}
+    assert pt.parse_landing("went in cup 2")["cup_number"] == 2
+    assert pt.parse_landing("hit") == {"hit": True, "outcome": "in"}
+    r = pt.parse_landing("rim of 4")
+    assert r["outcome"] == "rim_out" and r["rim_cup"] == 4 and r["hit"] is False
+    assert pt.parse_landing("it dropped")["outcome"] == "dropped"
+    assert pt.parse_landing("-12")["outcome"] == "short"
+    assert pt.parse_landing("12, -3") == {"hit": False, "long_cm": 12.0, "outcome": "long", "left_cm": -3.0}
