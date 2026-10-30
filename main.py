@@ -197,12 +197,15 @@ def _run_config():
             "rim_correction_mm": list(cup_aim.RIM_CORRECTION_MM),
             "topdown_correction_mm": list(cup_aim.TOPDOWN_CORRECTION_MM),
             "release_above_rim_mm": drop.RELEASE_ABOVE_RIM_MM,
+            "ball_color": pick_ball.BALL_COLOR,
             "autotune": "--autotune" in sys.argv}
 
 
 async def main():
     global TEL
     go = "--go" in sys.argv
+    import pick_ball
+    print("BALL:", pick_ball.set_ball_color_from_argv())
     print("MODE:", "LIVE (arm will move)" if go else "DRY RUN (no motion, nothing logged)")
     t0 = time.monotonic()
     home = dict(x=LOOK[0], y=LOOK[1], z=LOOK[2], o_x=0, o_y=0, o_z=-1, theta=THETA)
