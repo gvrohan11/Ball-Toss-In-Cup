@@ -32,6 +32,16 @@ from viam.services.motion import MotionClient
 
 from connection import connect
 
+# Windows ticks its timers every ~15.6 ms by default, so asyncio.sleep(0.10) could really be up to
+# 0.116 s - up to 16 ms of random release error. Ask for 1 ms timer resolution (no-op elsewhere).
+try:
+    import sys as _sys
+    if _sys.platform == "win32":
+        import ctypes
+        ctypes.WinDLL("winmm").timeBeginPeriod(1)
+except Exception:  # noqa: BLE001
+    pass
+
 ARM, GRIPPER = "arm", "gripper"
 NORMAL_SPEED = 60            # deg/s, the config value
 THROW_SPEED = 150            # deg/s default; module max is 180 (use --speed 180)
