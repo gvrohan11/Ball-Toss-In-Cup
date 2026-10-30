@@ -82,9 +82,19 @@ def _cup_str(c):
     return f"cup {c['number']} ({x:.0f}, {y:+.0f}) {_dist(c) / 10:.0f} cm"
 
 
+
+def _yaw(c):
+    return math.degrees(math.atan2(c["pos_mm"][1], c["pos_mm"][0]))
+
+
+def _side(c):
+    y = _yaw(c)
+    return "straight ahead" if abs(y) < 3 else (f"{abs(y):.0f} deg {'left' if y > 0 else 'right'}")
+
+
 async def survey_targets(motion, robot, go, preset, ratio):
-    """Survey once; returns every cup (numbered, nearest first) with c['reachable'] = inside the
-    preset's distance band."""
+    """Survey once; returns every cup with c['reachable'] = inside the preset's distance band,
+    numbered RIGHT TO LEFT as seen from behind the robot (cup 1 = rightmost, most negative y)."""
     import cup_aim
     import main
     cup_aim.MAX_CUP_REACH_MM = 2300   # the detector marks cups past the DROP reach; throws go farther
@@ -92,8 +102,13 @@ async def survey_targets(motion, robot, go, preset, ratio):
     print(f"0) survey the cups ({preset.upper()} throws land {lo / 10:.0f}-{hi / 10:.0f} cm from the base)")
     cups = await main.survey_cups(motion, robot, go, in_range=lambda p: lo <= math.hypot(p[0], p[1]) <= hi,
                                   range_label=f"the {preset} band {lo / 10:.0f}-{hi / 10:.0f} cm")
+    cups = sorted(cups, key=_yaw)                     # right (-y) to left (+y), as seen from behind the robot
+    print("  THROW CUPS, numbered right -> left as seen from behind the robot:")
     for n, c in enumerate(cups, 1):
         c["number"] = n
+        x, y, _ = c["pos_mm"]
+        print(f"    cup {n}: ({x:.0f}, {y:+.0f})  {_dist(c) / 10:.0f} cm, {_side(c)}"
+              + ("" if c["reachable"] else "  <- outside the throw band"))
     return cups
 
 
@@ -152,7 +167,7 @@ def plan_for(args, cup, ratio):
 
 
 async def fill_cups(robot, motion, args, go, cups, ratio):
-    """One ball per cup, nearest first, until every in-band cup is filled, balls run out, or picks
+    """One ball per cup, right to left, until every in-band cup is filled, balls run out, or picks
     keep failing. A hit fills whichever cup the ball went into ("in 3")."""
     targets = [c for c in cups if c["reachable"]]
     tries, pick_fails, throws, filled = {}, 0, 0, []
@@ -240,8 +255,8 @@ async def run(args):
         if args.fill_cups:
             await fill_cups(robot, motion, args, go, targets, ratio)
             return
-        cup = targets[0]
-        print(f"target: {_cup_str(cup)}")
+        cup = min(targets, key=lambda c: abs(_yaw(c)))   # default: the cup closest to straight ahead
+        print(f"target: {_cup_str(cup)}, {_side(cup)}")
         pl = plan_for(args, cup, ratio)                      # raises before anything is picked if unsafe
         await throw_at(robot, motion, args, go, pl, cup, t0)
     finally:
@@ -251,11 +266,13 @@ async def run(args):
 def main():
     ap = argparse.ArgumentParser(description="Pick the ball, then throw it at a cup.")
     throw.add_args(ap)
-    ap.add_argument("--aim-cup", action="store_true", help="survey the cups and throw at the nearest one in range")
+    ap.add_argument("--aim-cup", action="store_true",
+                    help="survey the cups and throw at the one closest to straight ahead (or --cup N)")
     ap.add_argument("--fill-cups", action="store_true", help="survey once, then one ball per cup until all are filled")
     ap.add_argument("--survey-only", action="store_true",
                     help="run the cup survey (planned moves only), list the cups, no pick/throw")
-    ap.add_argument("--cup", type=int, default=None, help="with --aim-cup: throw at survey cup N (1 = nearest)")
+    ap.add_argument("--cup", type=int, default=None,
+                    help="with --aim-cup: throw at cup N, numbered right -> left from behind the robot (1 = rightmost)")
     ap.add_argument("--force-aim", action="store_true", help="with --cup: throw even if it's outside the band")
     asyncio.run(run(ap.parse_args()))
 
