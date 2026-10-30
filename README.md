@@ -10,6 +10,7 @@ python check_connection.py  # read-only check
 python home.py              # send the arm to the saved safe home pose
 python main.py              # dry run: prints the plan, moves nothing, logs nothing
 python main.py --go         # live: home -> find + pick ball -> scan for cup -> drop -> home
+python pick_and_throw.py --distance 1100 --scale 0.3 --go --i-checked-with-staff  # Phase 2: PICK then THROW (staff OK first!)
 python main.py --go --autotune   # also correct the aim from recent misses stored in Atlas
 python main.py --go --ball white # pick a WHITE ball instead (or --ball any); default is orange. Put it alone on flat table, not in a bowl
 python dashboard.py --watch      # live hit-rate dashboard from Atlas (second screen)
